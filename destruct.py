@@ -2,9 +2,11 @@
 destruct
 A struct parsing library.
 """
+import os
+import io
 import collections
-import struct
 import itertools
+import struct
 import copy
 
 
@@ -29,27 +31,26 @@ __all__ = [
 
 
 class Type:
-    _consumed = 0
-
     def format(self):
         return None
 
     def parse(self, input):
         fmt = self.format()
         if fmt:
-            self._consumed = struct.calcsize(fmt)
-            return struct.unpack(fmt, input[:self._consumed])[0]
+            length = struct.calcsize(fmt)
+            return struct.unpack(fmt, input.read(length))[0]
         else:
             raise NotImplementedError
 
+
 class Nothing(Type):
     def parse(self, input):
-        self._consumed = 0
         return None
 
-ENDIAN_MAP = {
-    'little': '<',
-    'big': '>',
+
+ORDER_MAP = {
+    'le': '<',
+    'be': '>',
     'native': '='
 }
 
@@ -62,13 +63,13 @@ class Int(Type):
         128: 'q'
     }
 
-    def __init__(self, n, signed=True, endian='little'):
+    def __init__(self, n, signed=True, order='le'):
         self.n = n
         self.signed = signed
-        self.endian = endian
+        self.order = order
 
     def format(self):
-        endian = ENDIAN_MAP[self.endian]
+        endian = ORDER_MAP[self.order]
         kind = self.SIZE_MAP[self.n]
         if not self.signed:
             kind = kind.upper()
@@ -84,11 +85,12 @@ class Float(Type):
         64: 'd'
     }
 
-    def __init__(self, n=32, endian='little'):
+    def __init__(self, n=32, order='le'):
         self.n = n
+        self.order = order
 
     def format(self):
-        endian = ENDIAN_MAP[self.endian]
+        endian = ORDER_MAP[self.order]
         kind = self.SIZE_MAP[self.n]
         return '{e}{k}'.format(e=endian, k=kind)
 
@@ -102,10 +104,11 @@ class Sig(Type):
         self.sequence = sequence
 
     def parse(self, input):
-        if input[:len(self.sequence)] == self.sequence:
-            self._consumed = len(self.sequence)
-            return self.sequence
-        raise ValueError('{} does not match expected {}!'.format(input[:len(self.sequence)], self.sequence))
+        data = input.read(len(self.sequence))
+        if data != self.sequence:
+            raise ValueError('{} does not match expected {}!'.format(data, self.sequence))
+        return self.sequence
+
 
 class Str(Type):
     def __init__(self, max_length=0, encoding='utf-8'):
@@ -113,16 +116,17 @@ class Str(Type):
         self.encoding = encoding
 
     def parse(self, input):
-        if self.max_length:
-            n = input.find(b'\x00', 0, self.max_length)
-            if n < 0:
-                n = self.max_length
-        else:
-            n = input.find(b'\x00')
-            if n < 0:
-                n = len(input)
-        self._consumed = n
-        return bytes(input[:n]).rstrip(b'\x00').decode(self.encoding)
+        chars = []
+        for i in itertools.count(start=1):
+            if self.max_length and i > self.max_length:
+                break
+            c = input.read(1)
+            if not c or c == b'\x00':
+                break
+            chars.append(c)
+
+        data = b''.join(chars)
+        return data.decode(self.encoding)
 
 
 class Pad(Type):
@@ -130,9 +134,9 @@ class Pad(Type):
         self.length = length
 
     def parse(self, input):
-        if len(input) < self.length:
-            raise ValueError('Padding too little (expected {}, got {})!'.format(self.length, len(input)))
-        self._consumed = self.length
+        data = input.read(self.length)
+        if len(data) != self.length:
+            raise ValueError('Padding too little (expected {}, got {})!'.format(self.length, len(data)))
         return None
 
 class Data(Type):
@@ -140,10 +144,10 @@ class Data(Type):
         self.length = 0
 
     def parse(self, input):
-        if len(input) < self.length:
-            raise ValueError('Data length too little (expected {}, got {})!'.format(self.length, len(input)))
-        self._consumed = self.length
-        return input[:self.length]
+        data = input.read(self.length)
+        if len(data) != self.length:
+            raise ValueError('Data length too little (expected {}, got {})!'.format(self.length, len(data)))
+        return data
 
 
 class MetaSpec(collections.OrderedDict):
@@ -190,23 +194,29 @@ class Struct(Type, metaclass=MetaStruct):
 
     def parse(self, input):
         n = 0
+        pos = input.tell()
+
         for name, parser in self._spec.items():
+            if self._union:
+                input.seek(pos, os.SEEK_SET)
+
             val = parser.parse(input)
-            nbytes = parser._consumed
-            if self._align:
-                nbytes += self._align - (nbytes % self._align)
+            nbytes = input.tell() - pos
 
             if self._union:
                 n = max(n, nbytes)
             else:
-                n += nbytes
-                input = input[nbytes:]
+                if self._align:
+                    amount = self._align - (nbytes % self._align)
+                    input.seek(amount, os.SEEK_CUR)
+                    nbytes += amount
+                n = nbytes
 
             setattr(self, name, val)
             if hasattr(self, 'on_' + name):
                 getattr(self, 'on_' + name)(self._spec)
 
-        self._consumed = n
+        input.seek(pos + n, os.SEEK_SET)
         return self
 
 class Union(Struct, union=True):
@@ -220,10 +230,14 @@ class Any(Type):
 
     def parse(self, input):
         exceptions = []
+        pos = input.tell()
+
         for child in self.children:
+            input.seek(pos, os.SEEK_SET)
+
+            child = to_parser(child)
             try:
-                val = child.parse(input)
-                self._consumed = child._consumed
+                val = parse(child, input)
                 return val
             except Exception as e:
                 exceptions.append(e)
@@ -246,34 +260,36 @@ class Arr(Type):
 
     def parse(self, input):
         res = []
-        if self.count:
-            elems = range(self.count)
-        else:
-            elems = itertools.repeat(0)
-
         i = n = 0
-        while (not self.count or i < self.count) and (not self.max_length or n < self.max_length):
-            if not input:
-                if self.count:
-                    raise ValueError('Not enough elements in array, expected {} and got {}.'.format(self.count, n - 1))
-                else:
-                    break
+        pos = input.tell()
+
+        while True:
+            if self.count and i >= self.count:
+                break
+            if self.max_length and input.tell() - pos > self.max_length:
+                break
 
             child = to_parser(self.child)
             try:
                 v = parse(child, input)
             except:
-                if self.max_length:
+                if not self.count:
                     break
+                raise
+
+            if self.max_length and input.tell() - pos > self.max_length:
+                break
+
             res.append(v)
-            input = input[child._consumed:]
-
             i += 1
-            n += child._consumed
 
-        self._consumed = n
         return res
 
+
+def to_input(input):
+    if not isinstance(input, io.IOBase):
+        input = io.BytesIO(input)
+    return input
 
 def to_parser(spec):
     if isinstance(spec, Type):
@@ -283,4 +299,4 @@ def to_parser(spec):
     raise ValueError('Could not figure out specification from argument {}.'.format(spec))
 
 def parse(spec, input):
-    return to_parser(spec).parse(input)
+    return to_parser(spec).parse(to_input(input))

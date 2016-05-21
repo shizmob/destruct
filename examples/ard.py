@@ -1,3 +1,4 @@
+import os
 import sys
 from os import path
 from destruct import *
@@ -19,7 +20,7 @@ class ARDArchive(Struct):
     index  = Arr(ARDIndexEntry)
 
     def on_header(self, spec):
-        spec.index.length = self.header.count
+        spec.index.count = self.header.count
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
@@ -27,11 +28,11 @@ if __name__ == '__main__':
         sys.exit(1)
 
     with open(sys.argv[1], 'rb') as f:
-        contents = f.read()
+        archive = parse(ARDArchive, f)
 
-    archive = parse(ARDArchive, memoryview(contents))
-    for file in archive.index:
-        print('Reading {} (offset = {}, size = {})...'.format(file.name, file.offset, file.size))
-        dest = path.join(sys.argv[2], file.name)
-        with open(dest, 'wb') as f:
-            f.write(contents[file.offset:file.offset + file.size])
+        for file in archive.index:
+            print('Reading {} (offset = {}, size = {})...'.format(file.name, file.offset, file.size))
+            dest = path.join(sys.argv[2], file.name)
+            with open(dest, 'wb') as t:
+                f.seek(file.offset, os.SEEK_SET)
+                t.write(f.read(file.size))

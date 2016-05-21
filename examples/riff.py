@@ -8,32 +8,32 @@ def chunk(cls):
 
 
 class Chunk(Struct):
-    id = Sig(b'')
-    size = UInt(32)
+    id     = Sig(b'')
+    length = UInt(32)
 
 class MetaChunk(Chunk):
-    type = Str(4)
-    chunks = Seq(Any(CHUNKS))
+    type   = Str(4)
+    chunks = Arr(Any(CHUNKS))
 
     def on_size(self, spec):
-        spec.chunks.limit = self.size - 4
+        spec.chunks.max_length = self.length - 4
 
 
 @chunk
 class FormatChunk(Chunk):
-    id = Sig(b'fmt ')
+    id   = Sig(b'fmt ')
     data = Data()
 
     def on_size(self, spec):
-        spec.data.amount = self.size
+        spec.data.length = self.length
 
 @chunk
 class DataChunk(Chunk):
-    id = Sig(b'data')
+    id   = Sig(b'data')
     data = Data()
 
     def on_size(self, spec):
-        spec.data.amount = self.size
+        spec.data.length = self.length
 
 @chunk
 class RIFFChunk(MetaChunk):
