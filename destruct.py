@@ -11,6 +11,8 @@ import copy
 __all__ = [
     # Bases.
     'Type',
+    # Special types.
+    'Nothing',
     # Numeric types.
     'Int', 'UInt', 'Float', 'Double',
     # Data types.
@@ -40,6 +42,10 @@ class Type:
         else:
             raise NotImplementedError
 
+class Nothing(Type):
+    def parse(self, input):
+        self._consumed = 0
+        return None
 
 ENDIAN_MAP = {
     'little': '<',
