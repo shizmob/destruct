@@ -116,7 +116,7 @@ class Str(Type):
         if self.maxlen:
             n = self.maxlen
         else:
-            n = input.find('\x00')
+            n = input.find(b'\x00')
             if n < 0:
                 n = len(input)
         self._consumed = n
