@@ -275,13 +275,14 @@ class Seq(Type):
         res = []
 
         while input and (not self.limit or n < self.limit):
+            child = to_parser(self.child)
             try:
-                v = self.child.parse(input)
+                v = child.parse(input)
             except:
                 break
             res.append(v)
-            input = input[self.child._consumed:]
-            n += self.child._consumed
+            input = input[child._consumed:]
+            n += child._consumed
 
         self._consumed = n
         return res
