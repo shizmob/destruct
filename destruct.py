@@ -20,7 +20,7 @@ __all__ = [
     # Algebraic types.
     'Struct', 'Union',
     # List types.
-    'Arr', 'Seq',
+    'Arr',
     # Choice types.
     'Any',
     # Helper functions.
@@ -108,13 +108,15 @@ class Sig(Type):
         raise ValueError('{} does not match expected {}!'.format(input[:len(self.sequence)], self.sequence))
 
 class Str(Type):
-    def __init__(self, maxlen=0, encoding='utf-8'):
-        self.maxlen = maxlen
+    def __init__(self, max_length=0, encoding='utf-8'):
+        self.max_length = max_length
         self.encoding = encoding
 
     def parse(self, input):
-        if self.maxlen:
-            n = self.maxlen
+        if self.max_length:
+            n = input.find(b'\x00', 0, self.max_length)
+            if n < 0:
+                n = self.max_length
         else:
             n = input.find(b'\x00')
             if n < 0:
@@ -124,24 +126,24 @@ class Str(Type):
 
 
 class Pad(Type):
-    def __init__(self, amount=0):
-        self.amount = amount
+    def __init__(self, length=0):
+        self.length = length
 
     def parse(self, input):
-        if len(input) < self.amount:
-            raise ValueError('Padding too little (expected {}, got {})!'.format(self.amount, len(input)))
-        self._consumed = self.amount
+        if len(input) < self.length:
+            raise ValueError('Padding too little (expected {}, got {})!'.format(self.length, len(input)))
+        self._consumed = self.length
         return None
 
 class Data(Type):
-    def __init__(self, amount=0):
-        self.amount = 0
+    def __init__(self, length=0):
+        self.length = 0
 
     def parse(self, input):
-        if len(input) < self.amount:
-            raise ValueError('Padding too little (expected {}, got {})!'.format(self.amount, len(input)))
-        self._consumed = self.amount
-        return input[:self.amount]
+        if len(input) < self.length:
+            raise ValueError('Data length too little (expected {}, got {})!'.format(self.length, len(input)))
+        self._consumed = self.length
+        return input[:self.length]
 
 
 class MetaSpec(collections.OrderedDict):
@@ -237,51 +239,36 @@ class Any(Type):
 
 
 class Arr(Type):
-    def __init__(self, child, length=0):
+    def __init__(self, child, count=0, max_length=0):
         self.child = child
-        self.length = length
+        self.count = count
+        self.max_length = max_length
 
     def parse(self, input):
-        n = 0
         res = []
-        if self.length:
-            elems = range(self.length)
+        if self.count:
+            elems = range(self.count)
         else:
             elems = itertools.repeat(0)
 
-        for n in elems:
+        i = n = 0
+        while (not self.count or i < self.count) and (not self.max_length or n < self.max_length):
             if not input:
-                if self.length:
-                    raise ValueError('Not enough elements in array, expected {} and got {}.'.format(self.length, n - 1))
+                if self.count:
+                    raise ValueError('Not enough elements in array, expected {} and got {}.'.format(self.count, n - 1))
                 else:
                     break
 
             child = to_parser(self.child)
-            v = parse(child, input)
-            res.append(v)
-            input = input[child._consumed:]
-            n += child._consumed
-
-        self._consumed = n
-        return res
-
-class Seq(Type):
-    def __init__(self, child, limit=0):
-        self.child = child
-        self.limit = limit
-
-    def parse(self, input):
-        n = 0
-        res = []
-
-        while input and (not self.limit or n < self.limit):
-            child = to_parser(self.child)
             try:
-                v = child.parse(input)
+                v = parse(child, input)
             except:
-                break
+                if self.max_length:
+                    break
             res.append(v)
             input = input[child._consumed:]
+
+            i += 1
             n += child._consumed
 
         self._consumed = n
