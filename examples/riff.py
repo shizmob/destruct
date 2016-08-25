@@ -21,16 +21,60 @@ class MetaChunk(Chunk):
     chunks = Arr(Any(CHUNKS))
 
     def on_length(self, spec):
-        spec.chunks.max_length = self.length - 4
+        spec.chunks.max_length = self.length
 
 
 @chunk
 class FormatChunk(Chunk):
-    id   = Sig(b'fmt ')
-    data = Data()
+    id              = Sig(b'fmt ')
+    compression     = UInt(16)
+    channel_count   = UInt(16)
+    sample_rate     = UInt(32)
+    bytes_per_sec   = UInt(32)
+    alignment       = UInt(16)
+    bits_per_sample = UInt(16)
+    padding         = Data()
 
     def on_length(self, spec):
-        spec.data.length = self.length
+        spec.padding.length = self.length - (2 + 2 + 4 + 4 + 2 + 2)
+
+@chunk
+class FactChunk(Chunk):
+    id           = Sig(b'fact')
+    sample_count = UInt(32)
+    padding      = Data()
+
+    def on_length(self, spec):
+        spec.padding.length = self.length - 4
+
+class SampleLoop(Struct):
+    id       = UInt(32)
+    type     = UInt(32)
+    start    = UInt(32)
+    end      = UInt(32)
+    fraction = UInt(32)
+    count    = UInt(32)
+
+@chunk
+class SampleChunk(Chunk):
+    id                = Sig(b'smpl')
+    manufacturer      = UInt(32)
+    product           = UInt(32)
+    period            = UInt(32)
+    unity_note        = UInt(32)
+    pitch_fraction    = UInt(32)
+    smpte_format      = UInt(32)
+    smpte_offset      = UInt(32)
+    sample_loop_count = UInt(32)
+    padding_length    = UInt(32)
+    sample_loops      = Arr(SampleLoop)
+    padding           = Data()
+
+    def on_sample_loop_count(self, spec):
+        spec.sample_loops.count = self.sample_loop_count
+
+    def on_padding_length(self, spec):
+        spec.padding.length = self.padding_length - self.sample_loop_count * 6 * 4
 
 @chunk
 class DataChunk(Chunk):
