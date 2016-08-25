@@ -231,8 +231,9 @@ class Any(Type):
     def parse(self, input):
         exceptions = []
         pos = input.tell()
+        parsers = [to_parser(c) for c in self.children]
 
-        for child in self.children:
+        for child in parsers:
             input.seek(pos, os.SEEK_SET)
 
             child = to_parser(child)
@@ -243,7 +244,7 @@ class Any(Type):
                 exceptions.append(e)
 
         messages = []
-        for c, e in zip(self.children, exceptions):
+        for c, e in zip(parsers, exceptions):
             message = str(e)
             if '\n' in message:
                 first, _, others = message.partition('\n')
