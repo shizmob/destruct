@@ -2,6 +2,7 @@
 destruct
 A struct parsing library.
 """
+import sys
 import os
 import io
 import collections
@@ -172,13 +173,19 @@ class MetaStruct(type):
         spec = MetaSpec()
         for base in bases:
             spec.update(getattr(base, '_spec', {}))
+        hooks = {}
 
         for key, value in attrs.copy().items():
-            if isinstance(value, Type) or value is None:
+            if key.startswith('on_'):
+                hkey = key.replace('on_', '', 1)
+                hooks[hkey] = value
+                del attrs[key]
+            elif isinstance(value, Type) or value is None:
                 spec[key] = value
                 del attrs[key]
 
         attrs['_spec'] = spec
+        attrs['_hooks'] = hooks
         return type.__new__(cls, name, bases, attrs)
 
     def __init__(cls, *args, **kwargs):
@@ -200,7 +207,11 @@ class Struct(Type, metaclass=MetaStruct):
             if self._union:
                 input.seek(pos, os.SEEK_SET)
 
-            val = parser.parse(input)
+            try:
+                val = parser.parse(input)
+            except Exception as e:
+                traceback = sys.exc_info()[2]
+                raise type(e)('{}: {}'.format(name, e)).with_traceback(traceback)
             nbytes = input.tell() - pos
 
             if self._union:
@@ -213,8 +224,8 @@ class Struct(Type, metaclass=MetaStruct):
                 n = nbytes
 
             setattr(self, name, val)
-            if hasattr(self, 'on_' + name):
-                getattr(self, 'on_' + name)(self._spec)
+            if name in self._hooks:
+                self._hooks[name](self, self._spec)
 
         input.seek(pos + n, os.SEEK_SET)
         return self
