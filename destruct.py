@@ -281,12 +281,10 @@ class Arr(Type):
 
     def parse(self, input):
         res = []
-        i = n = 0
+        i = 0
         pos = input.tell()
 
-        while True:
-            if self.count and i >= self.count:
-                break
+        while not self.count or i < self.count:
             if self.max_length and input.tell() - pos > self.max_length:
                 break
 
@@ -298,7 +296,6 @@ class Arr(Type):
                 # Check EOF.
                 if input.read(1) == b'':
                     break
-
                 input.seek(-1, os.SEEK_CUR)
                 raise
 
