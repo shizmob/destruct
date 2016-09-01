@@ -272,10 +272,12 @@ class Any(Type):
 
 
 class Arr(Type):
-    def __init__(self, child, count=0, max_length=0):
+    def __init__(self, child, count=0, max_length=0, padding=0, pad_to=0):
         self.child = child
         self.count = count
         self.max_length = max_length
+        self.padding = padding
+        self.pad_to = pad_to
 
     def parse(self, input):
         res = []
@@ -288,13 +290,25 @@ class Arr(Type):
             if self.max_length and input.tell() - pos > self.max_length:
                 break
 
+            start = input.tell()
             child = to_parser(self.child)
             try:
                 v = parse(child, input)
             except:
-                if not self.count:
+                # Check EOF.
+                if input.read(1) == b'':
                     break
+
+                input.seek(-1, os.SEEK_CUR)
                 raise
+
+            if self.padding:
+                input.seek(self.padding, os.SEEK_CUR)
+
+            if self.pad_to:
+                diff = input.tell() - start
+                padding = self.pad_to - (diff % self.pad_to)
+                input.seek(padding, os.SEEK_CUR)
 
             if self.max_length and input.tell() - pos > self.max_length:
                 break
