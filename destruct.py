@@ -272,11 +272,11 @@ class Any(Type):
 
 
 class Arr(Type):
-    def __init__(self, child, count=0, max_length=0, padding=0, pad_to=0):
+    def __init__(self, child, count=0, max_length=0, pad_count=0, pad_to=0):
         self.child = child
         self.count = count
         self.max_length = max_length
-        self.padding = padding
+        self.pad_count = pad_count
         self.pad_to = pad_to
 
     def parse(self, input):
@@ -302,8 +302,8 @@ class Arr(Type):
                 input.seek(-1, os.SEEK_CUR)
                 raise
 
-            if self.padding:
-                input.seek(self.padding, os.SEEK_CUR)
+            if self.pad_count:
+                input.seek(self.pad_count, os.SEEK_CUR)
 
             if self.pad_to:
                 diff = input.tell() - start
