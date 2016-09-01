@@ -112,19 +112,25 @@ class Sig(Type):
 
 
 class Str(Type):
-    def __init__(self, max_length=0, encoding='utf-8'):
-        self.max_length = max_length
+    def __init__(self, length=0, exact=True, encoding='utf-8'):
+        self.length = length
+        self.exact = exact
         self.encoding = encoding
 
     def parse(self, input):
         chars = []
         for i in itertools.count(start=1):
-            if self.max_length and i > self.max_length:
+            if self.length and i > self.length:
                 break
             c = input.read(1)
             if not c or c == b'\x00':
                 break
             chars.append(c)
+
+        if self.length and self.exact:
+            left = self.length - len(chars)
+            if left:
+                input.read(left)
 
         data = b''.join(chars)
         return data.decode(self.encoding)
