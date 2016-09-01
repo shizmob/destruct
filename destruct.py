@@ -148,7 +148,7 @@ class Pad(Type):
 
 class Data(Type):
     def __init__(self, length=0):
-        self.length = 0
+        self.length = length
 
     def parse(self, input):
         data = input.read(self.length)
@@ -177,9 +177,10 @@ class MetaStruct(type):
 
     def __new__(cls, name, bases, attrs, **kwargs):
         spec = MetaSpec()
+        hooks = {}
         for base in bases:
             spec.update(getattr(base, '_spec', {}))
-        hooks = {}
+            hooks.update(getattr(base, '_hooks', {}))
 
         for key, value in attrs.copy().items():
             if key.startswith('on_'):
