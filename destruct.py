@@ -358,7 +358,8 @@ class Arr(Type):
             if self.pad_to:
                 diff = input.tell() - start
                 padding = self.pad_to - (diff % self.pad_to)
-                input.seek(padding, os.SEEK_CUR)
+                if padding != self.pad_to:
+                    input.seek(padding, os.SEEK_CUR)
 
             if self.max_length and input.tell() - pos > self.max_length:
                 break
