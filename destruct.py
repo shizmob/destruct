@@ -67,7 +67,7 @@ class Offset(Type):
             input.seek(self.offset, os.SEEK_SET)
 
         try:
-            return to_parser(self.child).parse(input)
+            return self.child.parse(input)
         finally:
             input.seek(pos, os.SEEK_SET)
 
@@ -281,28 +281,28 @@ class Maybe(Type):
         self.child = child
 
     def parse(self, input):
-        child = to_parser(self.child)
         pos = input.tell()
 
         try:
-            return parse(child, input)
+            return child.parse(input)
         except:
             input.seek(pos, os.SEEK_SET)
             return None
 
 class Any(Type):
-    def __init__(self, children):
+    def __init__(self, children, *args, **kwargs):
         self.children = children
+        self.args = args
+        self.kwargs = kwargs
 
     def parse(self, input):
         exceptions = []
         pos = input.tell()
-        parsers = [to_parser(c) for c in self.children]
+        parsers = [to_parser(c, *self.args, **self.kwargs) for c in self.children]
 
         for child in parsers:
             input.seek(pos, os.SEEK_SET)
 
-            child = to_parser(child)
             try:
                 val = parse(child, input)
                 return val
@@ -320,12 +320,14 @@ class Any(Type):
 
 
 class Arr(Type):
-    def __init__(self, child, count=0, max_length=0, pad_count=0, pad_to=0):
+    def __init__(self, child, count=0, max_length=0, pad_count=0, pad_to=0, *args, **kwargs):
         self.child = child
         self.count = count
         self.max_length = max_length
         self.pad_count = pad_count
         self.pad_to = pad_to
+        self.args = args
+        self.kwargs = kwargs
 
     def parse(self, input):
         res = []
@@ -337,7 +339,7 @@ class Arr(Type):
                 break
 
             start = input.tell()
-            child = to_parser(self.child)
+            child = to_parser(self.child, *self.args, **self.kwargs)
             try:
                 v = parse(child, input)
             except Exception as e:
@@ -375,11 +377,11 @@ def to_input(input):
         input = io.BytesIO(input)
     return input
 
-def to_parser(spec):
+def to_parser(spec, *args, **kwargs):
     if isinstance(spec, Type):
         return spec
     elif issubclass(spec, Type):
-        return spec()
+        return spec(*args, **kwargs)
     raise ValueError('Could not figure out specification from argument {}.'.format(spec))
 
 def parse(spec, input):
