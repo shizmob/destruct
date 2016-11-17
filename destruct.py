@@ -25,7 +25,7 @@ __all__ = [
     # List types.
     'Arr',
     # Choice types.
-    'Any',
+    'Maybe', 'Any',
     # Helper functions.
     'parse'
 ]
@@ -241,6 +241,20 @@ class Union(Struct, union=True):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, union=True, **kwargs)
 
+
+class Maybe(Type):
+    def __init__(self, child):
+        self.child = child
+
+    def parse(self, input):
+        child = to_parser(self.child)
+        pos = input.tell()
+
+        try:
+            return parse(child, input)
+        except:
+            input.seek(pos, os.SEEK_SET)
+            return None
 
 class Any(Type):
     def __init__(self, children):
