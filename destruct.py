@@ -248,7 +248,11 @@ class Struct(Type, metaclass=MetaStruct):
                 val = parser.parse(input)
             except Exception as e:
                 traceback = sys.exc_info()[2]
-                raise type(e)('{}: {}'.format(name, e)).with_traceback(traceback)
+                try:
+                    e = type(e)('{}: {}'.format(name, e)).with_traceback(traceback)
+                except:
+                    raise ValueError('{}: {}: {}'.format(name, type(e).__name__, e)).with_traceback(traceback)
+                raise e
             nbytes = input.tell() - pos
 
             if self._union:
@@ -336,12 +340,17 @@ class Arr(Type):
             child = to_parser(self.child)
             try:
                 v = parse(child, input)
-            except:
+            except Exception as e:
                 # Check EOF.
                 if input.read(1) == b'':
                     break
                 input.seek(-1, os.SEEK_CUR)
-                raise
+                traceback = sys.exc_info()[2]
+                try:
+                    e = type(e)('index {}: {}'.format(i, e)).with_traceback(traceback)
+                except:
+                    raise ValueError('index {}: {}: {}'.format(i, type(e).__name__, e)).with_traceback(traceback)
+                raise e
 
             if self.pad_count:
                 input.seek(self.pad_count, os.SEEK_CUR)
