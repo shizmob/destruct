@@ -15,7 +15,7 @@ __all__ = [
     # Bases.
     'Type',
     # Special types.
-    'Nothing',
+    'Nothing', 'Offset',
     # Numeric types.
     'Int', 'UInt', 'Float', 'Double',
     # Data types.
@@ -47,6 +47,26 @@ class Type:
 class Nothing(Type):
     def parse(self, input):
         return None
+
+class Offset(Type):
+    def __init__(self, child, offset=0, relative=False, to=0):
+        self.child = child
+        self.offset = offset
+        self.relative = relative
+        self.to = to
+
+    def parse(self, input):
+        pos = input.tell()
+
+        if self.relative:
+            input.seek(self.to + self.offset, os.SEEK_SET)
+        else:
+            input.seek(self.offset, os.SEEK_SET)
+
+        try:
+            return to_parser(self.child).parse(input)
+        finally:
+            input.seek(pos, os.SEEK_SET)
 
 
 ORDER_MAP = {
