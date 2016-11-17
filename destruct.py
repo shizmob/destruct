@@ -342,7 +342,7 @@ class Arr(Type):
         pos = input.tell()
 
         while not self.count or i < self.count:
-            if self.max_length and input.tell() - pos > self.max_length:
+            if self.max_length and input.tell() - pos >= self.max_length:
                 break
 
             start = input.tell()
