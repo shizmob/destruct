@@ -83,8 +83,7 @@ class Int(Type):
         8: 'b',
         16: 'h',
         32: 'i',
-        64: 'l',
-        128: 'q'
+        64: 'q'
     }
 
     def __init__(self, n, signed=True, order='le'):
