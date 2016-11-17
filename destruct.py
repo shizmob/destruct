@@ -15,7 +15,7 @@ __all__ = [
     # Bases.
     'Type',
     # Special types.
-    'Nothing', 'Offset',
+    'Nothing', 'Static', 'Offset',
     # Numeric types.
     'Int', 'UInt', 'Float', 'Double',
     # Data types.
@@ -50,6 +50,13 @@ class Type:
 class Nothing(Type):
     def parse(self, input):
         return None
+
+class Static(Type):
+    def __init__(self, value):
+        self.value = value
+
+    def parse(self, input):
+        return self.value
 
 class Offset(Type):
     def __init__(self, child, offset=0, relative=False, to=0):
