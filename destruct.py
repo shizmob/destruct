@@ -17,7 +17,7 @@ __all__ = [
     # Special types.
     'Nothing', 'Static', 'Offset',
     # Numeric types.
-    'Int', 'UInt', 'Float', 'Double',
+    'Int', 'UInt', 'Float', 'Double', 'Enum',
     # Data types.
     'Sig', 'Str', 'Pad', 'Data',
     # Algebraic types.
@@ -127,6 +127,14 @@ class Float(Type):
 class Double(Type):
     def __new__(self, *args, **kwargs):
         return Float(*args, n=64, **kwargs)
+
+class Enum(Type):
+    def __init__(self, child, enum):
+        self.child = child
+        self.enum = enum
+
+    def parse(self, input):
+        return self.enum(self.child.parse(input))
 
 
 class Sig(Type):
