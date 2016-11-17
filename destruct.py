@@ -39,7 +39,10 @@ class Type:
         fmt = self.format()
         if fmt:
             length = struct.calcsize(fmt)
-            return struct.unpack(fmt, input.read(length))[0]
+            vals = struct.unpack(fmt, input.read(length))
+            if len(vals) == 1:
+                return vals[0]
+            return vals
         else:
             raise NotImplementedError
 
