@@ -27,15 +27,55 @@ __all__ = [
     # Choice types.
     'Maybe', 'Any',
     # Helper functions.
-    'parse'
+    'parse', 'to_parser'
 ]
+
+
+def indent(s, count, start=False):
+    """ Indent all lines of a string. """
+    lines = s.splitlines()
+    for i in range(0 if start else 1, len(lines)):
+        lines[i] = ' ' * count + lines[i]
+    return '\n'.join(lines)
+
+def format_value(f, formatter, indentation=0):
+    """ Format containers to use the given formatter function instead of always repr(). """
+    if isinstance(f, (dict, collections.Mapping)):
+        if f:
+            fmt = '{{\n{}\n}}'
+            values = [indent(',\n'.join('{}: {}'.format(formatter(k), formatter(v)) for k, v in f.items()), 2, True)]
+        else:
+            fmt = '{{}}'
+            values = []
+    elif isinstance(f, (list, set, frozenset)):
+        if f:
+            fmt = '{{\n{}\n}}' if isinstance(f, (set, frozenset)) else '[\n{}\n]'
+            values = [indent(',\n'.join(formatter(v) for v in f), 2, True)]
+        else:
+            fmt = '{{}}' if isinstance(f, (set, frozenset)) else '[]'
+            values = []
+    elif isinstance(f, bytes):
+        fmt = '[{}]'
+        values = [' '.join(hex(b)[2:].zfill(2) for b in f)]
+    else:
+        fmt = '{}'
+        values = [formatter(f)]
+    return indent(fmt.format(*values), indentation)
+
+def propagate_exception(e, prefix):
+    traceback = sys.exc_info()[2]
+    try:
+        e = type(e)('{}: {}'.format(prefix, e))
+    except:
+        e = ValueError('{}: {}: {}'.format(prefix, type(e).__name__, e))
+    raise e.with_traceback(traceback) from None
 
 
 class Type:
     def format(self):
         return None
 
-    def parse(self, input):
+    def parse(self, input, context):
         fmt = self.format()
         if fmt:
             length = struct.calcsize(fmt)
@@ -48,33 +88,37 @@ class Type:
 
 
 class Nothing(Type):
-    def parse(self, input):
+    def parse(self, input, context):
         return None
 
 class Static(Type):
     def __init__(self, value):
         self.value = value
 
-    def parse(self, input):
+    def parse(self, input, context):
         return self.value
 
 class Offset(Type):
     def __init__(self, child, offset=0, relative=False, to=0):
-        self.child = child
         self.offset = offset
+        self.child = child
         self.relative = relative
         self.to = to
 
-    def parse(self, input):
-        pos = input.tell()
-
-        if self.relative:
-            input.seek(self.to + self.offset, os.SEEK_SET)
+    def parse(self, input, context):
+        if isinstance(self.offset, Type):
+            offset = parse(self.offset, input, context)
         else:
-            input.seek(self.offset, os.SEEK_SET)
+            offset = self.offset
+
+        pos = input.tell()
+        if self.relative:
+            input.seek(self.to + offset, os.SEEK_SET)
+        else:
+            input.seek(offset, os.SEEK_SET)
 
         try:
-            return self.child.parse(input)
+            return parse(self.child, input, context)
         finally:
             input.seek(pos, os.SEEK_SET)
 
@@ -129,19 +173,19 @@ class Double(Type):
         return Float(*args, n=64, **kwargs)
 
 class Enum(Type):
-    def __init__(self, child, enum):
+    def __init__(self, enum, child):
         self.child = child
         self.enum = enum
 
-    def parse(self, input):
-        return self.enum(self.child.parse(input))
+    def parse(self, input, context):
+        return self.enum(parse(self.child, input, context))
 
 
 class Sig(Type):
     def __init__(self, sequence):
         self.sequence = sequence
 
-    def parse(self, input):
+    def parse(self, input, context):
         data = input.read(len(self.sequence))
         if data != self.sequence:
             raise ValueError('{} does not match expected {}!'.format(data, self.sequence))
@@ -149,27 +193,42 @@ class Sig(Type):
 
 
 class Str(Type):
-    def __init__(self, length=0, exact=True, encoding='utf-8'):
+    def __init__(self, length=0, kind='c', exact=True, encoding='utf-8'):
         self.length = length
+        self.kind = kind
         self.exact = exact
         self.encoding = encoding
 
-    def parse(self, input):
-        chars = []
-        for i in itertools.count(start=1):
-            if self.length and i > self.length:
-                break
-            c = input.read(1)
-            if not c or c == b'\x00':
-                break
-            chars.append(c)
+    def parse(self, input, context):
+        if self.kind == 'c':
+            chars = []
+            for i in itertools.count(start=1):
+                if self.length and i > self.length:
+                    break
+                c = input.read(1)
+                if not c or c == b'\x00':
+                    break
+                chars.append(c)
 
-        if self.length and self.exact:
-            left = self.length - len(chars)
+            if self.length and self.exact:
+                left = self.length - len(chars)
+                if left:
+                    input.read(left)
+
+            data = b''.join(chars)
+        elif self.kind == 'pascal':
+            length = input.read(1)[0]
+            if self.length:
+                length = min(self.length, length)
+            if self.length and self.exact:
+                left = self.length - length
+            else:
+                left = 0
+            data = input.read(length)
             if left:
                 input.read(left)
-
-        data = b''.join(chars)
+        else:
+            raise ValueError('Unknown string kind: {}'.format(self.kind))
         return data.decode(self.encoding)
 
 
@@ -177,7 +236,7 @@ class Pad(Type):
     def __init__(self, length=0):
         self.length = length
 
-    def parse(self, input):
+    def parse(self, input, context):
         data = input.read(self.length)
         if len(data) != self.length:
             raise ValueError('Padding too little (expected {}, got {})!'.format(self.length, len(data)))
@@ -187,7 +246,7 @@ class Data(Type):
     def __init__(self, length=0):
         self.length = length
 
-    def parse(self, input):
+    def parse(self, input, context):
         data = input.read(self.length)
         if len(data) != self.length:
             raise ValueError('Data length too little (expected {}, got {})!'.format(self.length, len(data)))
@@ -240,10 +299,16 @@ class Struct(Type, metaclass=MetaStruct):
     _union = False
 
     def __init__(self, *args, **kwargs):
+        self.__ordered__ = collections.OrderedDict(self.__dict__)
         super().__init__(*args, **kwargs)
         self._spec = copy.deepcopy(self._spec)
 
-    def parse(self, input):
+    def __setattr__(self, n, v):
+        # Store new sets in ordered dict.
+        super().__setattr__(n, v)
+        self.__ordered__[n] = v
+
+    def parse(self, input, context):
         n = 0
         pos = input.tell()
 
@@ -260,14 +325,9 @@ class Struct(Type, metaclass=MetaStruct):
                 input.seek(pos, os.SEEK_SET)
 
             try:
-                val = parser.parse(input)
+                val = parse(parser, input, context)
             except Exception as e:
-                traceback = sys.exc_info()[2]
-                try:
-                    e = type(e)('{}: {}'.format(name, e)).with_traceback(traceback)
-                except:
-                    raise ValueError('{}: {}: {}'.format(name, type(e).__name__, e)).with_traceback(traceback)
-                raise e
+                propagate_exception(e, name)
             nbytes = input.tell() - pos
 
             if self._union:
@@ -281,10 +341,29 @@ class Struct(Type, metaclass=MetaStruct):
 
             setattr(self, name, val)
             if name in self._hooks:
-                self._hooks[name](self, self._spec)
+                self._hooks[name](self, self._spec, context)
 
         input.seek(pos + n, os.SEEK_SET)
         return self
+
+    def __str__(self, fieldfunc=str):
+        # Filter out fields we don't want to print: private (_xxx), const (XXX), methods
+        fields = [k for k in self.__ordered__ if not k.startswith('_') and not k[0].isupper() and not callable(getattr(self, k))]
+        # Format their values with fancy colouring according to type.
+        args = []
+        for k in fields:
+            val = getattr(self, k)
+            val = format_value(val, fieldfunc, 2)
+            args.append('  {}: {}'.format(k, val))
+        args = ',\n'.join(args)
+        # Format final value.
+        if args:
+            return '{} {{\n{}\n}}'.format(self.__class__.__name__, args)
+        else:
+            return '{} {{}}'.format(self.__class__.__name__)
+
+    def __repr__(self):
+        return self.__str__(repr)
 
 class Union(Struct, union=True):
     def __init__(self, *args, **kwargs):
@@ -295,11 +374,11 @@ class Maybe(Type):
     def __init__(self, child):
         self.child = child
 
-    def parse(self, input):
+    def parse(self, input, context):
         pos = input.tell()
 
         try:
-            return child.parse(input)
+            return parse(self.child, input, context)
         except:
             input.seek(pos, os.SEEK_SET)
             return None
@@ -310,7 +389,7 @@ class Any(Type):
         self.args = args
         self.kwargs = kwargs
 
-    def parse(self, input):
+    def parse(self, input, context):
         exceptions = []
         pos = input.tell()
         parsers = [to_parser(c, *self.args, **self.kwargs) for c in self.children]
@@ -319,8 +398,7 @@ class Any(Type):
             input.seek(pos, os.SEEK_SET)
 
             try:
-                val = parse(child, input)
-                return val
+                return parse(child, input, context)
             except Exception as e:
                 exceptions.append(e)
 
@@ -335,7 +413,7 @@ class Any(Type):
 
 
 class Arr(Type):
-    def __init__(self, child, count=0, max_length=0, pad_count=0, pad_to=0, *args, **kwargs):
+    def __init__(self, child, count=-1, max_length=-1, stop_value=None, pad_count=0, pad_to=0, *args, **kwargs):
         self.child = child
         self.count = count
         self.max_length = max_length
@@ -343,31 +421,27 @@ class Arr(Type):
         self.pad_to = pad_to
         self.args = args
         self.kwargs = kwargs
+        self.stop_value = stop_value
 
-    def parse(self, input):
+    def parse(self, input, context):
         res = []
         i = 0
         pos = input.tell()
 
-        while not self.count or i < self.count:
-            if self.max_length and input.tell() - pos >= self.max_length:
+        while self.count < 0 or i < self.count:
+            if self.max_length >= 0 and input.tell() - pos >= self.max_length:
                 break
 
             start = input.tell()
             child = to_parser(self.child, *self.args, **self.kwargs)
             try:
-                v = parse(child, input)
+                v = parse(child, input, context)
             except Exception as e:
                 # Check EOF.
                 if input.read(1) == b'':
                     break
                 input.seek(-1, os.SEEK_CUR)
-                traceback = sys.exc_info()[2]
-                try:
-                    e = type(e)('index {}: {}'.format(i, e)).with_traceback(traceback)
-                except:
-                    raise ValueError('index {}: {}: {}'.format(i, type(e).__name__, e)).with_traceback(traceback)
-                raise e
+                propagate_exception(e, 'index: {}'.format(i))
 
             if self.pad_count:
                 input.seek(self.pad_count, os.SEEK_CUR)
@@ -378,7 +452,7 @@ class Arr(Type):
                 if padding != self.pad_to:
                     input.seek(padding, os.SEEK_CUR)
 
-            if self.max_length and input.tell() - pos > self.max_length:
+            if v == self.stop_value or (self.max_length >= 0 and input.tell() - pos > self.max_length):
                 break
 
             res.append(v)
@@ -399,5 +473,5 @@ def to_parser(spec, *args, **kwargs):
         return spec(*args, **kwargs)
     raise ValueError('Could not figure out specification from argument {}.'.format(spec))
 
-def parse(spec, input):
-    return to_parser(spec).parse(to_input(input))
+def parse(spec, input, context=None):
+    return to_parser(spec).parse(to_input(input), context)
