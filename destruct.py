@@ -318,6 +318,7 @@ class Struct(Type, metaclass=MetaStruct):
 
         for name in self._spec.keys():
             parser = self._spec[name]
+            print('parsing {}.{}: {}'.format(self.__class__.__name__, name, parser))
             if parser is None:
                 continue
 
@@ -340,6 +341,7 @@ class Struct(Type, metaclass=MetaStruct):
                 n = nbytes
 
             setattr(self, name, val)
+            print('parsed {}.{}: {}'.format(self.__class__.__name__, name, val))
             if name in self._hooks:
                 self._hooks[name](self, self._spec, context)
 
@@ -398,8 +400,10 @@ class Any(Type):
             input.seek(pos, os.SEEK_SET)
 
             try:
+                print(child)
                 return parse(child, input, context)
             except Exception as e:
+                print(e)
                 exceptions.append(e)
 
         messages = []
@@ -413,15 +417,14 @@ class Any(Type):
 
 
 class Arr(Type):
-    def __init__(self, child, count=-1, max_length=-1, stop_value=None, pad_count=0, pad_to=0, *args, **kwargs):
+    def __init__(self, child, count=-1, max_length=-1, stop_value=None, pad_count=0, pad_to=0, spawner=None):
         self.child = child
         self.count = count
         self.max_length = max_length
+        self.stop_value = stop_value
         self.pad_count = pad_count
         self.pad_to = pad_to
-        self.args = args
-        self.kwargs = kwargs
-        self.stop_value = stop_value
+        self.spawner = spawner
 
     def parse(self, input, context):
         res = []
@@ -431,9 +434,14 @@ class Arr(Type):
         while self.count < 0 or i < self.count:
             if self.max_length >= 0 and input.tell() - pos >= self.max_length:
                 break
-
             start = input.tell()
-            child = to_parser(self.child, *self.args, **self.kwargs)
+
+            if self.spawner:
+                child = self.spawner(i, self.child)
+            else:
+                child = self.child
+            child = to_parser(child)
+
             try:
                 v = parse(child, input, context)
             except Exception as e:
