@@ -318,7 +318,6 @@ class Struct(Type, metaclass=MetaStruct):
 
         for name in self._spec.keys():
             parser = self._spec[name]
-            print('parsing {}.{}: {}'.format(self.__class__.__name__, name, parser))
             if parser is None:
                 continue
 
@@ -341,7 +340,6 @@ class Struct(Type, metaclass=MetaStruct):
                 n = nbytes
 
             setattr(self, name, val)
-            print('parsed {}.{}: {}'.format(self.__class__.__name__, name, val))
             if name in self._hooks:
                 self._hooks[name](self, self._spec, context)
 
@@ -400,10 +398,8 @@ class Any(Type):
             input.seek(pos, os.SEEK_SET)
 
             try:
-                print(child)
                 return parse(child, input, context)
             except Exception as e:
-                print(e)
                 exceptions.append(e)
 
         messages = []
