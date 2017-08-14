@@ -15,7 +15,7 @@ __all__ = [
     # Bases.
     'Type',
     # Special types.
-    'Nothing', 'Static', 'Anchor', 'Offset',
+    'Nothing', 'Static', 'RefPoint', 'Ref',
     # Numeric types.
     'Int', 'UInt', 'Float', 'Double', 'Enum',
     # Data types.
@@ -98,7 +98,7 @@ class Static(Type):
     def parse(self, input, context):
         return self.value
 
-class Anchor(Type):
+class RefPoint(Type):
     def __init__(self, default=None):
         self.pos = default
 
@@ -109,11 +109,10 @@ class Anchor(Type):
     def __int__(self):
         return self.pos
 
-class Offset(Type):
-    def __init__(self, child, offset=0, relative=False, reference=0):
-        self.offset = offset
+class Ref(Type):
+    def __init__(self, child, offset=0, reference=0):
         self.child = child
-        self.relative = relative
+        self.offset = offset
         self.reference = reference
 
     def parse(self, input, context):
@@ -121,12 +120,16 @@ class Offset(Type):
             offset = parse(self.offset, input, context)
         else:
             offset = self.offset
+        if isinstance(self.reference, Type):
+            reference = parse(self.reference, input, context)
+        else:
+            reference = self.reference
 
         pos = input.tell()
-        if self.relative:
-            input.seek(offset, os.SEEK_CUR)
+        if reference:
+            input.seek(reference + offset, os.SEEK_SET)
         else:
-            input.seek(int(self.reference) + offset, os.SEEK_SET)
+            input.seek(offset, os.SEEK_CUR)
 
         try:
             return parse(self.child, input, context)
