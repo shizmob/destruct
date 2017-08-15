@@ -123,7 +123,7 @@ class RefPoint(Type):
         pass
 
 class Ref(Type):
-    def __init__(self, child, offset=0, reference=0, reset=True):
+    def __init__(self, child, offset=0, reference=None, reset=True):
         self.child = child
         self.offset = offset
         self.reference = reference
@@ -140,7 +140,7 @@ class Ref(Type):
             reference = self.reference
 
         pos = input.tell()
-        if reference:
+        if reference is not None:
             input.seek(reference + offset, os.SEEK_SET)
         else:
             input.seek(offset, os.SEEK_CUR)
