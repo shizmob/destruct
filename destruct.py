@@ -501,8 +501,26 @@ class Any(Type):
         raise ValueError('Expected any of the following, nothing matched:\n{}'.format('\n'.join(messages)))
 
     def emit(self, output, value, context):
-        # TODO:
-        pass
+        exceptions = []
+        pos = output.tell()
+        parsers = [to_parser(c, *self.args, **self.kwargs) for c in self.children]
+
+        for child in parsers:
+            output.seek(pos, os.SEEK_SET)
+
+            try:
+                return emit(child, value, output, context)
+            except Exception as e:
+                exceptions.append(e)
+
+        messages = []
+        for c, e in zip(parsers, exceptions):
+            message = str(e)
+            if '\n' in message:
+                first, _, others = message.partition('\n')
+                message = '{}\n{}'.format(first, '\n'.join('  {}'.format(line) for line in others.split('\n')))
+            messages.append('- {}: {}: {}'.format(type(c).__name__, type(e).__name__, message))
+        raise ValueError('Expected any of the following, nothing matched:\n{}'.format('\n'.join(messages)))
 
 class Arr(Type):
     def __init__(self, child, count=-1, max_length=-1, stop_value=None, pad_count=0, pad_to=0, spawner=None):
