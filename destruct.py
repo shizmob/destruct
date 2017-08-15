@@ -27,7 +27,7 @@ __all__ = [
     # Choice types.
     'Maybe', 'Any',
     # Helper functions.
-    'parse', 'to_parser'
+    'parse', 'to_parser', 'emit'
 ]
 
 
@@ -85,11 +85,21 @@ class Type:
             return vals
         else:
             raise NotImplementedError
+    
+    def emit(self, value, output, context):
+        fmt = self.format()
+        if fmt:
+            output.write(struct.pack(fmt, value))
+        else:
+            raise NotImplementedError
 
 
 class Nothing(Type):
     def parse(self, input, context):
         return None
+    
+    def emit(self, value, output, context):
+        pass
 
 class Static(Type):
     def __init__(self, value):
@@ -97,6 +107,9 @@ class Static(Type):
 
     def parse(self, input, context):
         return self.value
+
+    def emit(self, value, output, context):
+        pass
 
 class RefPoint(Type):
     def __init__(self, default=None):
@@ -106,8 +119,8 @@ class RefPoint(Type):
         self.pos = input.tell()
         return self.pos
 
-    def __int__(self):
-        return self.pos
+    def emit(self, value, output, context):
+        pass
 
 class Ref(Type):
     def __init__(self, child, offset=0, reference=0, reset=True):
@@ -138,6 +151,9 @@ class Ref(Type):
             if self.reset:
                 input.seek(pos, os.SEEK_SET)
 
+    def emit(self, value, output, context):
+        # TODO
+        pass
 
 ORDER_MAP = {
     'le': '<',
@@ -196,6 +212,8 @@ class Enum(Type):
     def parse(self, input, context):
         return self.enum(parse(self.child, input, context))
 
+    def emit(self, value, output, context):
+        return to_parser(self.child).emit(value.value, output, context)
 
 class Sig(Type):
     def __init__(self, sequence):
@@ -206,7 +224,9 @@ class Sig(Type):
         if data != self.sequence:
             raise ValueError('{} does not match expected {}!'.format(data, self.sequence))
         return self.sequence
-
+    
+    def emit(self, value, output, context):
+        output.write(self.sequence)
 
 class Str(Type):
     def __init__(self, length=0, kind='c', exact=True, encoding='utf-8'):
@@ -247,16 +267,39 @@ class Str(Type):
             raise ValueError('Unknown string kind: {}'.format(self.kind))
         return data.decode(self.encoding)
 
+    def emit(self, value, output, context):
+        if self.length:
+            length = self.length
+        else:
+            length = len(value) + 1
+        value = value[:length].encode(self.encoding)
+
+        if self.kind == 'c':
+            output.write(value)
+            if len(value) < length:
+                output.write(b'\x00')
+        elif self.kind == 'pascal':
+            output.write(chr(length))
+            output.write(value)
+            
 
 class Pad(Type):
-    def __init__(self, length=0):
+    BLOCK_SIZE = 2048
+
+    def __init__(self, length=0, value='\x00'):
         self.length = length
+        self.value = value
 
     def parse(self, input, context):
         data = input.read(self.length)
         if len(data) != self.length:
             raise ValueError('Padding too little (expected {}, got {})!'.format(self.length, len(data)))
         return None
+    
+    def emit(self, value, output, context):
+        for i in range(0, self.length, self.BLOCK_SIZE):
+            n = min(self.BLOCK_SIZE, self.length - self.BLOCK_SIZE)
+            output.write(self.value * n)
 
 class Data(Type):
     def __init__(self, length=0):
@@ -267,6 +310,9 @@ class Data(Type):
         if len(data) != self.length:
             raise ValueError('Data length too little (expected {}, got {})!'.format(self.length, len(data)))
         return data
+    
+    def emit(self, value, output, context):
+        output.write(value)
 
 
 class MetaSpec(collections.OrderedDict):
@@ -332,11 +378,7 @@ class Struct(Type, metaclass=MetaStruct):
             if parser is None:
                 setattr(self, name, None)
 
-        for name in self._spec.keys():
-            parser = self._spec[name]
-            if parser is None:
-                continue
-
+        for name, parser in self._spec.items():
             if self._union:
                 input.seek(pos, os.SEEK_SET)
 
@@ -344,8 +386,8 @@ class Struct(Type, metaclass=MetaStruct):
                 val = parse(parser, input, context)
             except Exception as e:
                 propagate_exception(e, name)
-            nbytes = input.tell() - pos
 
+            nbytes = input.tell() - pos
             if self._union:
                 n = max(n, nbytes)
             else:
@@ -361,6 +403,32 @@ class Struct(Type, metaclass=MetaStruct):
 
         input.seek(pos + n, os.SEEK_SET)
         return self
+    
+    def emit(self, value, output, context):
+        n = 0
+        pos = output.tell()
+
+        for name, parser in self._spec.items():
+            if self._union:
+                output.seek(pos, os.SEEK_SET)
+
+            field = getattr(value, name)
+            try:
+                emit(parser, field, output, context)
+            except Exception as e:
+                propagate_exception(e, name)
+            
+            nbytes = output.tell() - pos
+            if self._union:
+                n = max(n, nbytes)
+            else:
+                if self._align:
+                    amount = self._align - (nbytes % self._align)
+                    output.write('\x00' * amount)
+                    nbytes += amount
+                n = nbytes
+        
+        output.seek(pos + n, os.SEEK_SET)
 
     def __str__(self, fieldfunc=str):
         # Filter out fields we don't want to print: private (_xxx), const (XXX), methods
@@ -398,6 +466,11 @@ class Maybe(Type):
         except:
             input.seek(pos, os.SEEK_SET)
             return None
+    
+    def emit(self, value, output, context):
+        if value is None:
+            return
+        return emit(self.child, value, output, context)
 
 class Any(Type):
     def __init__(self, children, *args, **kwargs):
@@ -427,6 +500,9 @@ class Any(Type):
             messages.append('- {}: {}: {}'.format(type(c).__name__, type(e).__name__, message))
         raise ValueError('Expected any of the following, nothing matched:\n{}'.format('\n'.join(messages)))
 
+    def emit(self, output, value, context):
+        # TODO:
+        pass
 
 class Arr(Type):
     def __init__(self, child, count=-1, max_length=-1, stop_value=None, pad_count=0, pad_to=0, spawner=None):
@@ -479,7 +555,31 @@ class Arr(Type):
             i += 1
 
         return res
+    
+    def emit(self, value, output, context):
+        if self.stop_value:
+            value = value + [stop_value]
 
+        for i, elem in enumerate(value):
+            start = output.tell()
+
+            if self.spawner:
+                child = self.spawner(i, self.child)
+            else:
+                child = self.child
+
+            try:
+                emit(child, output, value, context)
+            except Exception as e:
+                propagate_exception(e, '[index {}]'.format(i))
+            
+            if self.pad_count:
+                output.write('\x00' * self.pad_count)
+            if self.pad_to:
+                diff = output.tell() - start
+                padding = self.pad_to - (diff % self.pad_to)
+                if padding != self.pad_to:
+                    output.write('\x00' * padding)
 
 def to_input(input):
     if not isinstance(input, io.IOBase):
@@ -495,3 +595,6 @@ def to_parser(spec, *args, **kwargs):
 
 def parse(spec, input, context=None):
     return to_parser(spec).parse(to_input(input), context)
+
+def emit(spec, value, output, context=None):
+    return to_parser(spec).emit(value, to_input(output), context)
