@@ -21,7 +21,7 @@ __all__ = [
     # Data types.
     'Sig', 'Str', 'Pad', 'Data',
     # Algebraic types.
-    'Struct', 'Union',
+    'Struct', 'Union', 'Tuple',
     # List types.
     'Arr',
     # Choice types.
@@ -453,6 +453,26 @@ class Union(Struct, union=True):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, union=True, **kwargs)
 
+class Tuple(Type):
+    def __init__(self, children):
+        self.children = children
+
+    def parse(self, input, context):
+        vals = []
+        for i, child in enumerate(self.children):
+            try:
+                vals.append(parse(child, input, context))
+            except Exception as e:
+                propagate_exception(e, '[index {}]'.format(i))
+        return vals
+
+    def emit(self, value, output, context):
+        for i, (child, val) in enumerate(zip(self.children, value)):
+            try:
+                emit(child, val, output, context)
+            except Exception as e:
+                propagate_exception(e, '[index {}]'.format(i))
+
 
 class Maybe(Type):
     def __init__(self, child):
@@ -605,10 +625,13 @@ def to_input(input):
     return input
 
 def to_parser(spec, *args, **kwargs):
-    if isinstance(spec, Type):
+    if isinstance(spec, (list, tuple)):
+        return Tuple(spec)
+    elif isinstance(spec, Type):
         return spec
     elif issubclass(spec, Type):
         return spec(*args, **kwargs)
+
     raise ValueError('Could not figure out specification from argument {}.'.format(spec))
 
 def parse(spec, input, context=None):
