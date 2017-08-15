@@ -110,10 +110,11 @@ class RefPoint(Type):
         return self.pos
 
 class Ref(Type):
-    def __init__(self, child, offset=0, reference=0):
+    def __init__(self, child, offset=0, reference=0, reset=True):
         self.child = child
         self.offset = offset
         self.reference = reference
+        self.reset = reset
 
     def parse(self, input, context):
         if isinstance(self.offset, Type):
@@ -134,7 +135,8 @@ class Ref(Type):
         try:
             return parse(self.child, input, context)
         finally:
-            input.seek(pos, os.SEEK_SET)
+            if self.reset:
+                input.seek(pos, os.SEEK_SET)
 
 
 ORDER_MAP = {
@@ -459,7 +461,7 @@ class Arr(Type):
                 if input.read(1) == b'':
                     break
                 input.seek(-1, os.SEEK_CUR)
-                propagate_exception(e, 'index: {}'.format(i))
+                propagate_exception(e, '[index {}]'.format(i))
 
             if self.pad_count:
                 input.seek(self.pad_count, os.SEEK_CUR)
