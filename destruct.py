@@ -327,45 +327,28 @@ class Data(Type):
 
 
 class Proxy(Type):
-    def __init__(self, parent, attr, stack=None):
-        self._stack = stack or []
+    def __init__(self, parent, path, stack=None):
+        self._stack = [] if stack is None else stack
         self._parent = parent
-        self._attr = attr
-
-    def parse(self, input, context):
-        return getattr(self._stack[-1], self._attr)
-
-    def emit(self, value, output, context):
-        child = getattr(self._parent._spec[self._attr])
-        return child.emit(getattr(self._stack[-1], self._attr), output, context)
-
-    def __getattr__(self, name):
-        return AttrProxy(self, [name])
-        
-    def __deepcopy__(self, memo):
-        return self
-
-class AttrProxy(Type):
-    def __init__(self, root, path):
-        self._root = root
         self._path = path
 
     def parse(self, input, context):
-        obj = self._root.parse(input, context)
+        obj = self._stack[-1]
         for x in self._path:
             obj = getattr(obj, x)
         return obj
 
     def emit(self, value, output, context):
-        spec = self._root
+        child = self._parent
         for x in self._path:
-            spec = spec._spec[x]
-        return spec.emit(value, output, context)
+            child = child._spec[x]
+        return child.emit(value, output, context)
 
     def __getattr__(self, name):
-        if name.startswith('_'):
-            raise AttributeError(name)
-        return AttrProxy(self._root, self._path + [name])
+        return Proxy(self._parent, self._path + [name], stack=self._stack)
+        
+    def __deepcopy__(self, memo):
+        return self
 
 class MetaSpec(collections.OrderedDict):
     def __getattr__(self, item):
@@ -387,7 +370,7 @@ class MetaAttrs(collections.OrderedDict):
 
     def __getitem__(self, item):
         if item in self and not item.startswith('_'):
-            proxy = Proxy(self.cls, item)
+            proxy = Proxy(self.cls, [item])
             self.proxies.append(proxy)
             return proxy
         return super().__getitem__(item)
