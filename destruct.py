@@ -434,6 +434,8 @@ class Struct(Type, metaclass=MetaStruct):
             proxy._stack.append(self)
 
         for name, parser in self._spec.items():
+            if parser is None:
+                continue
             if self._union:
                 input.seek(pos, os.SEEK_SET)
 
