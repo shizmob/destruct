@@ -326,7 +326,7 @@ class Data(Type):
         output.write(value)
 
 
-class Proxy(Type):
+class MetaProxy(Type):
     def __init__(self, parent, path, stack=None):
         self._stack = [] if stack is None else stack
         self._parent = parent
@@ -370,7 +370,7 @@ class MetaAttrs(collections.OrderedDict):
 
     def __getitem__(self, item):
         if item in self and not item.startswith('_'):
-            proxy = Proxy(self.cls, [item])
+            proxy = MetaProxy(self.cls, [item])
             self.proxies.append(proxy)
             return proxy
         return super().__getitem__(item)
