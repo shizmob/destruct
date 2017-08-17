@@ -76,7 +76,7 @@ class Type:
         return None
 
     def parse(self, input, context):
-        fmt = self.format()
+        fmt = self.format(input, context)
         if fmt:
             length = struct.calcsize(fmt)
             vals = struct.unpack(fmt, input.read(length))
@@ -87,7 +87,7 @@ class Type:
             raise NotImplementedError
     
     def emit(self, value, output, context):
-        fmt = self.format()
+        fmt = self.format(output, context)
         if fmt:
             output.write(struct.pack(fmt, value))
         else:
@@ -106,7 +106,7 @@ class Static(Type):
         self.value = value
 
     def parse(self, input, context):
-        return self.value
+        return to_value(self.value, input, context)
 
     def emit(self, value, output, context):
         pass
@@ -130,14 +130,8 @@ class Ref(Type):
         self.reset = reset
 
     def parse(self, input, context):
-        if isinstance(self.offset, Type):
-            offset = parse(self.offset, input, context)
-        else:
-            offset = self.offset
-        if isinstance(self.reference, Type):
-            reference = parse(self.reference, input, context)
-        else:
-            reference = self.reference
+        offset = to_value(self.offset, input, context)
+        reference = to_value(self.reference, input, context)
 
         pos = input.tell()
         if reference is not None:
@@ -148,12 +142,13 @@ class Ref(Type):
         try:
             return parse(self.child, input, context)
         finally:
-            if self.reset:
+            if to_value(self.reset, input, context):
                 input.seek(pos, os.SEEK_SET)
 
     def emit(self, value, output, context):
         # TODO
         pass
+
 
 ORDER_MAP = {
     'le': '<',
@@ -174,10 +169,10 @@ class Int(Type):
         self.signed = signed
         self.order = order
 
-    def format(self):
-        endian = ORDER_MAP[self.order]
-        kind = self.SIZE_MAP[self.n]
-        if not self.signed:
+    def format(self, input, context):
+        endian = ORDER_MAP[to_value(self.order, input, context)]
+        kind = self.SIZE_MAP[to_value(self.n, input, context)]
+        if not to_value(self.signed, input, context):
             kind = kind.upper()
         return '{e}{k}'.format(e=endian, k=kind)
 
@@ -195,14 +190,15 @@ class Float(Type):
         self.n = n
         self.order = order
 
-    def format(self):
-        endian = ORDER_MAP[self.order]
-        kind = self.SIZE_MAP[self.n]
+    def format(self, input, context):
+        endian = ORDER_MAP[to_value(self.order, input, context)]
+        kind = self.SIZE_MAP[to_value(self.n, input, context)]
         return '{e}{k}'.format(e=endian, k=kind)
 
 class Double(Type):
     def __new__(self, *args, **kwargs):
         return Float(*args, n=64, **kwargs)
+
 
 class Enum(Type):
     def __init__(self, enum, child):
@@ -215,18 +211,20 @@ class Enum(Type):
     def emit(self, value, output, context):
         return to_parser(self.child).emit(value.value, output, context)
 
+
 class Sig(Type):
     def __init__(self, sequence):
         self.sequence = sequence
 
     def parse(self, input, context):
-        data = input.read(len(self.sequence))
-        if data != self.sequence:
-            raise ValueError('{} does not match expected {}!'.format(data, self.sequence))
-        return self.sequence
+        sequence = to_value(self.sequence, input, context)
+        data = input.read(len(sequence))
+        if data != sequence:
+            raise ValueError('{} does not match expected {}!'.format(data, sequence))
+        return sequence
     
     def emit(self, value, output, context):
-        output.write(self.sequence)
+        output.write(to_value(self.sequence, output, context))
 
 class Str(Type):
     def __init__(self, length=0, kind='c', exact=True, encoding='utf-8'):
@@ -236,49 +234,57 @@ class Str(Type):
         self.encoding = encoding
 
     def parse(self, input, context):
-        if self.kind == 'c':
+        length = to_value(self.length, input, context)
+        kind = to_value(self.kind, input, context)
+        exact = to_value(self.exact, input, context)
+        encoding = to_value(self.encoding, input, context)
+
+        if kind in ('raw', 'c'):
             chars = []
             for i in itertools.count(start=1):
-                if self.length and i > self.length:
+                if length and i > length:
                     break
                 c = input.read(1)
-                if not c or c == b'\x00':
+                if not c or (kind == 'c' and c == b'\x00'):
                     break
                 chars.append(c)
 
-            if self.length and self.exact:
-                left = self.length - len(chars)
+            if length and exact:
+                left = length - len(chars)
                 if left:
                     input.read(left)
 
             data = b''.join(chars)
-        elif self.kind == 'pascal':
-            length = input.read(1)[0]
-            if self.length:
-                length = min(self.length, length)
-            if self.length and self.exact:
-                left = self.length - length
+        elif kind == 'pascal':
+            outlen = input.read(1)[0]
+            if length:
+                outlen = min(length, outlen)
+            if length and exact:
+                left = length - outlen
             else:
                 left = 0
             data = input.read(length)
             if left:
                 input.read(left)
         else:
-            raise ValueError('Unknown string kind: {}'.format(self.kind))
-        return data.decode(self.encoding)
+            raise ValueError('Unknown string kind: {}'.format(kind))
+        return data.decode(encoding)
 
     def emit(self, value, output, context):
-        if self.length:
-            length = self.length
-        else:
-            length = len(value) + 1
-        value = value[:length].encode(self.encoding)
+        length = to_value(self.length, output, context)
+        kind = to_value(self.kind, output, context)
+        exact = to_value(self.exact, output, context)
+        encoding = to_value(self.encoding, output, context)
 
-        if self.kind == 'c':
+        if not length:
+            length = len(value) + 1
+        value = value[:length].encode(encoding)
+
+        if kind in ('raw', 'c'):
             output.write(value)
-            if len(value) < length:
+            if kind == 'c' and len(value) < length:
                 output.write(b'\x00')
-        elif self.kind == 'pascal':
+        elif kind == 'pascal':
             output.write(chr(length))
             output.write(value)
             
@@ -291,29 +297,75 @@ class Pad(Type):
         self.value = value
 
     def parse(self, input, context):
-        data = input.read(self.length)
-        if len(data) != self.length:
-            raise ValueError('Padding too little (expected {}, got {})!'.format(self.length, len(data)))
+        length = to_value(length, input, context)
+        data = input.read(length)
+        if len(data) != length:
+            raise ValueError('Padding too little (expected {}, got {})!'.format(length, len(data)))
         return None
     
     def emit(self, value, output, context):
-        for i in range(0, self.length, self.BLOCK_SIZE):
-            n = min(self.BLOCK_SIZE, self.length - self.BLOCK_SIZE)
-            output.write(self.value * n)
+        length = to_value(length, output, context)
+        value = to_value(length, output, context)
+
+        for i in range(0, length, self.BLOCK_SIZE):
+            n = min(self.BLOCK_SIZE, length - self.BLOCK_SIZE)
+            output.write(value * n)
 
 class Data(Type):
     def __init__(self, length=0):
         self.length = length
 
     def parse(self, input, context):
-        data = input.read(self.length)
-        if len(data) != self.length:
-            raise ValueError('Data length too little (expected {}, got {})!'.format(self.length, len(data)))
+        length = to_value(self.length, input, context)
+        data = input.read(length)
+        if len(data) != length:
+            raise ValueError('Data length too little (expected {}, got {})!'.format(length, len(data)))
         return data
     
     def emit(self, value, output, context):
         output.write(value)
 
+
+class Proxy(Type):
+    def __init__(self, parent, attr, stack=None):
+        self._stack = stack or []
+        self._parent = parent
+        self._attr = attr
+
+    def parse(self, input, context):
+        return getattr(self._stack[-1], self._attr)
+
+    def emit(self, value, output, context):
+        child = getattr(self._parent._spec[self._attr])
+        return child.emit(getattr(self._stack[-1], self._attr), output, context)
+
+    def __getattr__(self, name):
+        return AttrProxy(self, [name])
+        
+    def __deepcopy__(self, memo):
+        return self
+
+class AttrProxy(Type):
+    def __init__(self, root, path):
+        self._root = root
+        self._path = path
+
+    def parse(self, input, context):
+        obj = self._root.parse(input, context)
+        for x in self._path:
+            obj = getattr(obj, x)
+        return obj
+
+    def emit(self, value, output, context):
+        spec = self._root
+        for x in self._path:
+            spec = spec._spec[x]
+        return spec.emit(value, output, context)
+
+    def __getattr__(self, name):
+        if name.startswith('_'):
+            raise AttributeError(name)
+        return AttrProxy(self._root, self._path + [name])
 
 class MetaSpec(collections.OrderedDict):
     def __getattr__(self, item):
@@ -328,17 +380,33 @@ class MetaSpec(collections.OrderedDict):
         else:
             self[item] = value
 
+class MetaAttrs(collections.OrderedDict):
+    def __init__(self, cls, *args, **kwargs):
+        self.cls = cls
+        self.proxies = []
+
+    def __getitem__(self, item):
+        if item in self and not item.startswith('_'):
+            proxy = Proxy(self.cls, item)
+            self.proxies.append(proxy)
+            return proxy
+        return super().__getitem__(item)
+
 class MetaStruct(type):
     @classmethod
     def __prepare__(cls, name, bases, **kwargs):
-        return collections.OrderedDict({'_' + k: v for k, v in kwargs.items()})
+        return MetaAttrs(cls, {'_' + k: v for k, v in kwargs.items()})
 
     def __new__(cls, name, bases, attrs, **kwargs):
         spec = MetaSpec()
         hooks = {}
+        proxies = attrs.proxies[:]
+        attrs = collections.OrderedDict(attrs)
+
         for base in bases:
             spec.update(getattr(base, '_spec', {}))
             hooks.update(getattr(base, '_hooks', {}))
+            proxies.extend(getattr(base, '_proxies', []))
 
         for key, value in attrs.copy().items():
             if key.startswith('on_'):
@@ -351,6 +419,7 @@ class MetaStruct(type):
 
         attrs['_spec'] = spec
         attrs['_hooks'] = hooks
+        attrs['_proxies'] = proxies
         return type.__new__(cls, name, bases, attrs)
 
     def __init__(cls, *args, **kwargs):
@@ -378,6 +447,9 @@ class Struct(Type, metaclass=MetaStruct):
             if parser is None:
                 setattr(self, name, None)
 
+        for proxy in self._proxies:
+            proxy._stack.append(self)
+
         for name, parser in self._spec.items():
             if self._union:
                 input.seek(pos, os.SEEK_SET)
@@ -400,6 +472,9 @@ class Struct(Type, metaclass=MetaStruct):
             setattr(self, name, val)
             if name in self._hooks:
                 self._hooks[name](self, self._spec, context)
+
+        for proxy in self._proxies:
+            proxy._stack.pop()
 
         input.seek(pos + n, os.SEEK_SET)
         return self
@@ -556,9 +631,15 @@ class Arr(Type):
         res = []
         i = 0
         pos = input.tell()
+        
+        count = to_value(self.count, input, context)
+        max_length = to_value(self.count, input, context)
+        stop_value = to_value(self.stop_value, input, context)
+        pad_count = to_value(self.pad_count, input, context)
+        pad_to = to_value(self.pad_to, input, context)
 
-        while self.count < 0 or i < self.count:
-            if self.max_length >= 0 and input.tell() - pos >= self.max_length:
+        while count < 0 or i < count:
+            if max_length >= 0 and input.tell() - pos >= max_length:
                 break
             start = input.tell()
 
@@ -577,16 +658,16 @@ class Arr(Type):
                 input.seek(-1, os.SEEK_CUR)
                 propagate_exception(e, '[index {}]'.format(i))
 
-            if self.pad_count:
-                input.seek(self.pad_count, os.SEEK_CUR)
+            if pad_count:
+                input.seek(pad_count, os.SEEK_CUR)
 
-            if self.pad_to:
+            if pad_to:
                 diff = input.tell() - start
-                padding = self.pad_to - (diff % self.pad_to)
-                if padding != self.pad_to:
+                padding = pad_to - (diff % pad_to)
+                if padding != pad_to:
                     input.seek(padding, os.SEEK_CUR)
 
-            if v == self.stop_value or (self.max_length >= 0 and input.tell() - pos > self.max_length):
+            if v == stop_value or (max_length >= 0 and input.tell() - pos > max_length):
                 break
 
             res.append(v)
@@ -595,7 +676,11 @@ class Arr(Type):
         return res
     
     def emit(self, value, output, context):
-        if self.stop_value:
+        stop_value = to_value(self.stop_value, output, context)
+        pad_count = to_value(self.pad_count, output, context)
+        pad_to = to_value(self.pad_to, output, context)
+
+        if stop_value:
             value = value + [stop_value]
 
         for i, elem in enumerate(value):
@@ -611,13 +696,14 @@ class Arr(Type):
             except Exception as e:
                 propagate_exception(e, '[index {}]'.format(i))
             
-            if self.pad_count:
-                output.write('\x00' * self.pad_count)
-            if self.pad_to:
+            if pad_count:
+                output.write('\x00' * pad_count)
+            if pad_to:
                 diff = output.tell() - start
-                padding = self.pad_to - (diff % self.pad_to)
-                if padding != self.pad_to:
+                padding = pad_to - (diff % pad_to)
+                if padding != pad_to:
                     output.write('\x00' * padding)
+
 
 def to_input(input):
     if not isinstance(input, io.IOBase):
@@ -633,6 +719,11 @@ def to_parser(spec, *args, **kwargs):
         return spec(*args, **kwargs)
 
     raise ValueError('Could not figure out specification from argument {}.'.format(spec))
+
+def to_value(p, input, context):
+    if isinstance(p, Type):
+        return p.parse(input, context)
+    return p
 
 def parse(spec, input, context=None):
     return to_parser(spec).parse(to_input(input), context)
