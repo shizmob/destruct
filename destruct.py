@@ -72,7 +72,7 @@ def propagate_exception(e, prefix):
 
 
 class Type:
-    def format(self):
+    def format(self, input, context):
         return None
 
     def parse(self, input, context):
@@ -297,15 +297,15 @@ class Pad(Type):
         self.value = value
 
     def parse(self, input, context):
-        length = to_value(length, input, context)
+        length = to_value(self.length, input, context)
         data = input.read(length)
         if len(data) != length:
             raise ValueError('Padding too little (expected {}, got {})!'.format(length, len(data)))
         return None
     
     def emit(self, value, output, context):
-        length = to_value(length, output, context)
-        value = to_value(length, output, context)
+        length = to_value(self.length, output, context)
+        value = to_value(self.value, output, context)
 
         for i in range(0, length, self.BLOCK_SIZE):
             n = min(self.BLOCK_SIZE, length - self.BLOCK_SIZE)
@@ -365,6 +365,7 @@ class MetaSpec(collections.OrderedDict):
 
 class MetaAttrs(collections.OrderedDict):
     def __init__(self, cls, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.cls = cls
         self.proxies = []
 
