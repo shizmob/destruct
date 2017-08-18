@@ -6,6 +6,7 @@ import sys
 import os
 import io
 import collections
+import inspect
 import itertools
 import struct
 import copy
@@ -697,7 +698,7 @@ def to_parser(spec, ident=None):
         return Tuple(spec)
     elif isinstance(spec, Type):
         return spec
-    elif issubclass(spec, Type):
+    elif inspect.isclass(spec) and issubclass(spec, Type):
         return spec()
     elif callable(spec):
         return spec(ident)
