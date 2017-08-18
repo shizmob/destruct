@@ -563,15 +563,13 @@ class Maybe(Type):
         return emit(self.child, value, output, context)
 
 class Any(Type):
-    def __init__(self, children, *args, **kwargs):
+    def __init__(self, children):
         self.children = children
-        self.args = args
-        self.kwargs = kwargs
 
     def parse(self, input, context):
         exceptions = []
         pos = input.tell()
-        parsers = [to_parser(c, *self.args, **self.kwargs) for c in self.children]
+        parsers = [to_parser(c, i) for i, c in enumerate(self.children)]
 
         for child in parsers:
             input.seek(pos, os.SEEK_SET)
@@ -593,7 +591,7 @@ class Any(Type):
     def emit(self, output, value, context):
         exceptions = []
         pos = output.tell()
-        parsers = [to_parser(c, *self.args, **self.kwargs) for c in self.children]
+        parsers = [to_parser(c, i) for i, c in enumerate(self.children)]
 
         for child in parsers:
             output.seek(pos, os.SEEK_SET)
@@ -613,14 +611,13 @@ class Any(Type):
         raise ValueError('Expected any of the following, nothing matched:\n{}'.format('\n'.join(messages)))
 
 class Arr(Type):
-    def __init__(self, child, count=-1, max_length=-1, stop_value=None, pad_count=0, pad_to=0, spawner=None):
+    def __init__(self, child, count=-1, max_length=-1, stop_value=None, pad_count=0, pad_to=0):
         self.child = child
         self.count = count
         self.max_length = max_length
         self.stop_value = stop_value
         self.pad_count = pad_count
         self.pad_to = pad_to
-        self.spawner = spawner
 
     def parse(self, input, context):
         res = []
@@ -637,12 +634,7 @@ class Arr(Type):
             if max_length >= 0 and input.tell() - pos >= max_length:
                 break
             start = input.tell()
-
-            if self.spawner:
-                child = self.spawner(i, self.child)
-            else:
-                child = self.child
-            child = to_parser(child)
+            child = to_parser(self.child, i)
 
             try:
                 v = parse(child, input, context)
@@ -680,12 +672,7 @@ class Arr(Type):
 
         for i, elem in enumerate(value):
             start = output.tell()
-
-            if self.spawner:
-                child = self.spawner(i, self.child)
-            else:
-                child = self.child
-
+            child = to_parser(self.child, i)
             try:
                 emit(child, output, value, context)
             except Exception as e:
@@ -705,13 +692,15 @@ def to_input(input):
         input = io.BytesIO(input)
     return input
 
-def to_parser(spec, *args, **kwargs):
+def to_parser(spec, ident=None):
     if isinstance(spec, (list, tuple)):
         return Tuple(spec)
     elif isinstance(spec, Type):
         return spec
     elif issubclass(spec, Type):
-        return spec(*args, **kwargs)
+        return spec()
+    elif callable(spec):
+        return spec(ident)
 
     raise ValueError('Could not figure out specification from argument {}.'.format(spec))
 
