@@ -292,12 +292,18 @@ class Str(Type):
 class Pad(Type):
     BLOCK_SIZE = 2048
 
-    def __init__(self, length=0, value='\x00'):
+    def __init__(self, length=0, value='\x00', reference=None):
         self.length = length
         self.value = value
+        self.reference = reference
 
     def parse(self, input, context):
         length = to_value(self.length, input, context)
+        reference = to_value(self.reference, input, context)
+
+        if self.reference is not None:
+            length = length - (input.tell() - reference)
+
         data = input.read(length)
         if len(data) != length:
             raise ValueError('Padding too little (expected {}, got {})!'.format(length, len(data)))
@@ -363,18 +369,21 @@ class MetaSpec(collections.OrderedDict):
         else:
             self[item] = value
 
-class MetaAttrs(collections.OrderedDict):
+class MetaAttrs:
     def __init__(self, cls, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        self.inner = collections.OrderedDict()
         self.cls = cls
         self.proxies = []
 
+    def __setitem__(self, name, value):
+        self.inner[name] = value
+
     def __getitem__(self, item):
-        if item in self and not item.startswith('_'):
+        if item in self.inner and not item.startswith('_'):
             proxy = MetaProxy(self.cls, [item])
             self.proxies.append(proxy)
             return proxy
-        return super().__getitem__(item)
+        return self.inner.__getitem__(item)
 
 class MetaStruct(type):
     @classmethod
@@ -385,7 +394,7 @@ class MetaStruct(type):
         spec = MetaSpec()
         hooks = {}
         proxies = attrs.proxies[:]
-        attrs = collections.OrderedDict(attrs)
+        attrs = collections.OrderedDict(attrs.inner)
 
         for base in bases:
             spec.update(getattr(base, '_spec', {}))
@@ -619,7 +628,7 @@ class Arr(Type):
         pos = input.tell()
         
         count = to_value(self.count, input, context)
-        max_length = to_value(self.count, input, context)
+        max_length = to_value(self.max_length, input, context)
         stop_value = to_value(self.stop_value, input, context)
         pad_count = to_value(self.pad_count, input, context)
         pad_to = to_value(self.pad_to, input, context)
