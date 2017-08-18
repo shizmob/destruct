@@ -351,7 +351,7 @@ class MetaProxy(Type):
         return child.emit(value, output, context)
 
     def __getattr__(self, name):
-        return Proxy(self._parent, self._path + [name], stack=self._stack)
+        return self.__class__(self._parent, self._path + [name], stack=self._stack)
         
     def __deepcopy__(self, memo):
         return self
