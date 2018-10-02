@@ -10,6 +10,7 @@ import inspect
 import itertools
 import struct
 import copy
+import datetime
 
 
 __all__ = [
@@ -21,6 +22,8 @@ __all__ = [
     'Int', 'UInt', 'Float', 'Double', 'Enum',
     # Data types.
     'Sig', 'Str', 'Pad', 'Data',
+    # Misc types.
+    'DateTime',
     # Algebraic types.
     'Struct', 'Union', 'Tuple',
     # List types.
@@ -339,6 +342,27 @@ class Data(Type):
     
     def emit(self, value, output, context):
         output.write(value)
+
+
+class DateTime(Type):
+    def __init__(self, child=None, format=None, timestamp=False):
+        self.child = child
+        self.format = format
+        self.timestamp = timestamp
+
+    def parse(self, input, context):
+        val = parse(self.child, input, context)
+        if self.timestamp:
+            return datetime.datetime.fromtimestamp(val)
+        else:
+            return datetime.datetime.strptime(val,  self.format)
+
+    def emit(self, value, output, context):
+        if self.timestamp:
+            val = value.timestamp()
+        else:
+            val = value.strftime(self.format)
+        return emit(self.child, val, output, context)
 
 
 class MetaProxy(Type):
