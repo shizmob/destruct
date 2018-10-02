@@ -297,7 +297,7 @@ class Str(Type):
 class Pad(Type):
     BLOCK_SIZE = 2048
 
-    def __init__(self, length=0, value='\x00', reference=None):
+    def __init__(self, length=0, value=b'\x00', reference=None):
         self.length = length
         self.value = value
         self.reference = reference
@@ -318,9 +318,13 @@ class Pad(Type):
         length = to_value(self.length, output, context)
         value = to_value(self.value, output, context)
 
-        for i in range(0, length, self.BLOCK_SIZE):
-            n = min(self.BLOCK_SIZE, length - self.BLOCK_SIZE)
-            output.write(value * n)
+        if self.reference is not None:
+            length = length - (output.tell() - reference)
+
+        amount, remainder = divmod(length, len(value))
+        output.write(value * amount)
+        if remainder:
+            output.write(value[:remainder])
 
 class Data(Type):
     def __init__(self, length=0):
