@@ -597,7 +597,7 @@ class Any(Type):
             messages.append('- {}: {}: {}'.format(type(c).__name__, type(e).__name__, message))
         raise ValueError('Expected any of the following, nothing matched:\n{}'.format('\n'.join(messages)))
 
-    def emit(self, output, value, context):
+    def emit(self, value, output, context):
         exceptions = []
         pos = output.tell()
         parsers = [to_parser(c, i) for i, c in enumerate(self.children)]
@@ -683,7 +683,7 @@ class Arr(Type):
             start = output.tell()
             child = to_parser(self.child, i)
             try:
-                emit(child, output, value, context)
+                emit(child, elem, output, context)
             except Exception as e:
                 propagate_exception(e, '[index {}]'.format(i))
             
