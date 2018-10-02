@@ -251,7 +251,7 @@ class Str(Type):
                 chars.append(c)
 
             if length and exact:
-                left = length - len(chars)
+                left = length - len(chars) - (kind == 'c' and c == b'\x00')
                 if left:
                     input.read(left)
 
@@ -283,8 +283,12 @@ class Str(Type):
 
         if kind in ('raw', 'c'):
             output.write(value)
-            if kind == 'c' and len(value) < length:
+            written = len(value)
+            if kind == 'c' and written < length:
                 output.write(b'\x00')
+                written += 1
+            if self.exact and written < length:
+                output.write(b'\x00' * (length - written))
         elif kind == 'pascal':
             output.write(chr(length))
             output.write(value)
