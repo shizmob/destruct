@@ -25,7 +25,7 @@ __all__ = [
     # Misc types.
     'DateTime',
     # Algebraic types.
-    'Struct', 'Union', 'Tuple',
+    'Struct', 'Union', 'Tuple', 'Switch',
     # List types.
     'Arr',
     # Choice types.
@@ -575,6 +575,29 @@ class Tuple(Type):
                 emit(child, val, output, context)
             except Exception as e:
                 propagate_exception(e, '[index {}]'.format(i))
+
+class Switch(Type):
+    def __init__(self, default=None, **kwargs):
+        self.options = kwargs
+        self.selector = default
+
+    def parse(self, input, context):
+        if self.selector is None:
+            raise ValueError('Selector not set!')
+        if self.selector not in self.options:
+            raise ValueError('Selector {} is invalid! [options: {}]'.format(
+                self.selector, ', '.join(self.options.keys())
+            ))
+        return parse(self.options[self.selector], input, context)
+
+    def emit(self, value, output, context):
+        if self.selector is None:
+            raise ValueError('Selector not set!')
+        if self.selector not in self.options:
+            raise ValueError('Selector {} is invalid! [options: {}]'.format(
+                self.selector, ', '.join(self.options.keys())
+            ))
+        return emit(self.options[self.selector], value, output, context)
 
 
 class Maybe(Type):
