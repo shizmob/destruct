@@ -17,7 +17,7 @@ __all__ = [
     # Bases.
     'Type',
     # Special types.
-    'Nothing', 'Static', 'RefPoint', 'Ref',
+    'Nothing', 'Static', 'RefPoint', 'Ref', 'Process',
     # Numeric types.
     'Int', 'UInt', 'Float', 'Double', 'Enum',
     # Data types.
@@ -152,6 +152,23 @@ class Ref(Type):
     def emit(self, value, output, context):
         # TODO
         pass
+
+class Process(Type):
+    def __init__(self, child=None, parse=None, emit=None):
+        self.child = child
+        self.do_parse = parse
+        self.do_emit = emit
+
+    def parse(self, input, context):
+        val = parse(self.child, input, context)
+        if self.do_parse:
+            val = self.do_parse(val)
+        return val
+
+    def emit(self, value, output, context):
+        if self.do_emit:
+            value = self.do_emit(value)
+        return emit(self.child, value, output, context)
 
 
 ORDER_MAP = {
