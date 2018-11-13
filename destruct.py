@@ -284,7 +284,7 @@ class Str(Type):
                 left = length - outlen
             else:
                 left = 0
-            data = input.read(length)
+            data = input.read(outlen)
             if left:
                 input.read(left)
         else:
