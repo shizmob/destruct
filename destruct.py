@@ -547,8 +547,12 @@ class Struct(Type, metaclass=MetaStruct):
 
     def __init__(self, *args, **kwargs):
         self.__ordered__ = collections.OrderedDict(self.__dict__)
-        super().__init__(*args, **kwargs)
+        super().__init__()
         self._spec = copy.deepcopy(self._spec)
+        for n in self._spec:
+            setattr(self, n, Nothing())
+        for n, v in kwargs.items():
+            setattr(self, n, v)
 
     def __setattr__(self, n, v):
         # Store new sets in ordered dict.
