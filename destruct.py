@@ -5,6 +5,7 @@ A struct parsing library.
 import sys
 import os
 import io
+import types
 import collections
 import inspect
 import itertools
@@ -15,7 +16,7 @@ import datetime
 
 __all__ = [
     # Bases.
-    'Type',
+    'Type', 'Context', 'Proxy',
     # Special types.
     'Nothing', 'Static', 'RefPoint', 'Ref', 'Process',
     # Numeric types.
@@ -73,6 +74,12 @@ def propagate_exception(e, prefix):
     except:
         e = ValueError('{}: {}: {}'.format(prefix, type(e).__name__, e))
     raise e.with_traceback(traceback) from None
+
+
+class Context:
+    def __init__(self):
+        self.parents = []
+        self.user = types.SimpleNamespace()
 
 
 class Type:
@@ -385,29 +392,105 @@ class DateTime(Type):
         return emit(self.child, val, output, context)
 
 
-class MetaProxy(Type):
-    def __init__(self, parent, path, stack=None):
-        self._stack = [] if stack is None else stack
-        self._parent = parent
-        self._path = path
+
+def proxy_magic_method(name, type=None):
+    def inner(self, *args, **kwargs):
+        return self._check_magic_method(name, type, *args, **kwargs)
+    return inner
+
+class Proxy(Type):
+    def __init__(self, type):
+        self.__type = type
 
     def parse(self, input, context):
-        obj = self._stack[-1]
-        for x in self._path:
-            obj = getattr(obj, x)
-        return obj
+        return context.parents[-1]
 
     def emit(self, value, output, context):
-        child = self._parent
-        for x in self._path:
-            child = child._spec[x]
-        return child.emit(value, output, context)
+        pass
 
     def __getattr__(self, name):
-        return self.__class__(self._parent, self._path + [name], stack=self._stack)
-        
+        return ProxyAttr(to_type(getattr(self.__type, name)), self, name)
+
+    def __getitem__(self, key):
+        return ProxyItem(None, self, key)
+
+    def __call__(self, *args, **kwargs):
+        if hasattr(self.__type, '__annotations__'):
+            type = self.__type.__annotations__.get('return')
+        else:
+            type = None
+        return ProxyCall(type, self, args, kwargs)
+
     def __deepcopy__(self, memo):
         return self
+ 
+    def _check_magic_method(self, name, type, *args, **kwargs):
+        if hasattr(self.__type, name):
+            try:
+                getattr(self.__type(), name)(*args, **kwargs)
+                proxy = self.__getattr__(name).__call__(*args, **kwargs)
+                proxy.__type = proxy.__type or type or self.__type
+                return proxy
+            except:
+                raise NotImplemented
+        raise AttributeError
+
+MAGIC_ARITH_METHODS = (
+    'add', 'sub', 'mul', 'matmul', 'truediv', 'floordiv', 'mod', 'divmod', 'pow',
+    'lshift', 'rshift', 'and', 'xor', 'or'
+)
+MAGIC_METHODS = {
+    # misc arithmethic
+    'neg': None, 'pos': None, 'abs': None, 'invert': None,
+    'complex': None, 'int': int, 'float': float, 'round': int, 'trunc': int, 'floor': int, 'ceil': int,
+    # attributes, iteration
+    'index': int, 'dir': list, 'next': None,
+    # context management
+    'enter': None, 'exit': None,
+    # async
+    'await': None, 'aiter': None, 'anext': None, 'aenter': None, 'aexit': None,
+    # representations
+    #'str', 'repr', 'bytes', 'format', 'hash',
+    # comparison
+    'lt': bool, 'ge': bool, 'eq': bool, 'ne': bool, 'gt': bool, 'ge': bool,
+}
+for pfx in ('', 'r', 'i'):
+    for x in MAGIC_ARITH_METHODS:
+        MAGIC_METHODS[pfx + x] = None
+for x, t in MAGIC_METHODS.items():
+    x = '__' + x + '__'
+    setattr(Proxy, x, proxy_magic_method(x, t))
+
+class ProxyAttr(Proxy):
+    def __init__(self, type, parent, name):
+        super().__init__(type)
+        self.__name = name
+        self.__parent = parent
+
+    def parse(self, input, context):
+        return getattr(parse(self.__parent, input, context), self.__name)
+
+class ProxyCall(Proxy):
+    def __init__(self, type, parent, args, kwargs):
+        super().__init__(type)
+        self.__parent = parent
+        self.__args = args
+        self.__kwargs = kwargs
+    
+    def parse(self, input, context):
+        args = [to_value(a, input, context) for a in self.__args]
+        kwargs = {k: to_value(v, input, context) for k, v in self.__kwargs.items()}
+        return parse(self.__parent, input, context)(*args, **kwargs)
+
+class ProxyItem(Proxy):
+    def __init__(self, type, parent, name):
+        super().__init__(type)
+        self.__parent = parent
+        self.__name = name
+    
+    def parse(self, input, context):
+        return parse(self.__parent, input, context)[self.__name]
+
 
 class MetaSpec(collections.OrderedDict):
     def __getattr__(self, item):
@@ -422,42 +505,27 @@ class MetaSpec(collections.OrderedDict):
         else:
             self[item] = value
 
-class MetaAttrs:
-    def __init__(self, cls, *args, **kwargs):
-        self.inner = collections.OrderedDict()
-        self.cls = cls
-        self.proxies = []
-
-    def __setitem__(self, name, value):
-        self.inner[name] = value
-
-    def __getitem__(self, item):
-        if item in self.inner and not item.startswith('_'):
-            proxy = MetaProxy(self.cls, [item])
-            self.proxies.append(proxy)
-            return proxy
-        return self.inner.__getitem__(item)
-
 class MetaStruct(type):
     @classmethod
     def __prepare__(cls, name, bases, **kwargs):
-        return MetaAttrs(cls, {'_' + k: v for k, v in kwargs.items()})
+        attrs = MetaSpec({'_' + k: v for k, v in kwargs.items()})
+        attrs['self'] = Proxy(attrs)
+        return attrs
 
     def __new__(cls, name, bases, attrs, **kwargs):
         spec = MetaSpec()
         hooks = {}
-        proxies = attrs.proxies[:]
-        attrs = collections.OrderedDict(attrs.inner)
 
         for base in bases:
             spec.update(getattr(base, '_spec', {}))
             hooks.update(getattr(base, '_hooks', {}))
-            proxies.extend(getattr(base, '_proxies', []))
 
         for key, value in attrs.copy().items():
             if key.startswith('on_'):
                 hkey = key.replace('on_', '', 1)
                 hooks[hkey] = value
+                del attrs[key]
+            elif key == 'self' and isinstance(value, Proxy):
                 del attrs[key]
             elif isinstance(value, Type) or value is None:
                 spec[key] = value
@@ -465,7 +533,7 @@ class MetaStruct(type):
 
         attrs['_spec'] = spec
         attrs['_hooks'] = hooks
-        attrs['_proxies'] = proxies
+
         return type.__new__(cls, name, bases, attrs)
 
     def __init__(cls, *args, **kwargs):
@@ -489,12 +557,11 @@ class Struct(Type, metaclass=MetaStruct):
         n = 0
         pos = input.tell()
 
+        context.parents.append(self)
+
         for name, parser in self._spec.items():
             if parser is None:
                 setattr(self, name, None)
-
-        for proxy in self._proxies:
-            proxy._stack.append(self)
 
         for name, parser in self._spec.items():
             if parser is None:
@@ -520,9 +587,8 @@ class Struct(Type, metaclass=MetaStruct):
             setattr(self, name, val)
             if name in self._hooks:
                 self._hooks[name](self, self._spec, context)
-
-        for proxy in self._proxies:
-            proxy._stack.pop()
+        
+        context.parents.pop()
 
         input.seek(pos + n, os.SEEK_SET)
         return self
@@ -530,6 +596,8 @@ class Struct(Type, metaclass=MetaStruct):
     def emit(self, value, output, context):
         n = 0
         pos = output.tell()
+
+        context.parents.append(self)
 
         for name, parser in self._spec.items():
             if self._union:
@@ -550,6 +618,8 @@ class Struct(Type, metaclass=MetaStruct):
                     output.write('\x00' * amount)
                     nbytes += amount
                 n = nbytes
+        
+        context.parents.pop()
         
         output.seek(pos + n, os.SEEK_SET)
 
@@ -786,7 +856,7 @@ def to_value(p, input, context):
     return p
 
 def parse(spec, input, context=None):
-    return to_parser(spec).parse(to_input(input), context)
+    return to_parser(spec).parse(to_input(input), context or Context())
 
 def emit(spec, value, output, context=None):
-    return to_parser(spec).emit(value, to_input(output), context)
+    return to_parser(spec).emit(value, to_input(output), context or Context())
