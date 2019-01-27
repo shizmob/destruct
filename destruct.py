@@ -357,13 +357,15 @@ class Pad(Type):
             output.write(value[:remainder])
 
 class Data(Type):
+    type = bytes
+
     def __init__(self, length=0):
         self.length = length
 
     def parse(self, input, context):
         length = to_value(self.length, input, context)
         data = input.read(length)
-        if len(data) != length:
+        if length >= 0 and len(data) != length:
             raise ValueError('Data length too little (expected {}, got {})!'.format(length, len(data)))
         return data
     
