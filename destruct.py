@@ -650,7 +650,24 @@ class Struct(Type, metaclass=MetaStruct):
 
 class Union(Struct, union=True):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, union=True, **kwargs)
+        super().__init__(*args, **kwargs)
+
+    def __setattr__(self, n, v):
+        super().__setattr__(n, v)
+
+        val = io.BytesIO()
+        try:
+            emit(self._spec[n], v, val)
+        except:
+            return
+
+        for fn, fs in self._spec.items():
+            if fn != n:
+                val.seek(0)
+                try:
+                    super().__setattr__(fn, parse(fs, val))
+                except:
+                    pass
 
 class Tuple(Type):
     def __init__(self, children):
