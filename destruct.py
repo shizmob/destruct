@@ -248,11 +248,14 @@ class Sig(Type):
         output.write(to_value(self.sequence, output, context))
 
 class Str(Type):
-    def __init__(self, length=0, kind='c', exact=True, encoding='utf-8'):
+    type = str
+
+    def __init__(self, length=0, kind='c', exact=True, encoding='utf-8', length_type=UInt(8)):
         self.length = length
         self.kind = kind
         self.exact = exact
         self.encoding = encoding
+        self.length_type = length_type
 
     def parse(self, input, context):
         length = to_value(self.length, input, context)
@@ -277,7 +280,7 @@ class Str(Type):
 
             data = b''.join(chars)
         elif kind == 'pascal':
-            outlen = input.read(1)[0]
+            outlen = parse(self.length_type, input)
             if length:
                 outlen = min(length, outlen)
             if length and exact:
