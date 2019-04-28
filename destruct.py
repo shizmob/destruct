@@ -374,15 +374,16 @@ class Data(Type):
 
 
 class DateTime(Type):
-    def __init__(self, child=None, format=None, timestamp=False):
+    def __init__(self, child=None, format=None, timestamp=False, timezone=datetime.timezone.utc):
         self.child = child
         self.format = format
         self.timestamp = timestamp
+        self.timezone = timezone
 
     def parse(self, input, context):
         val = parse(self.child, input, context)
         if self.timestamp:
-            return datetime.datetime.fromtimestamp(val)
+            return datetime.datetime.fromtimestamp(val, tz=self.timezone)
         else:
             return datetime.datetime.strptime(val,  self.format)
 
