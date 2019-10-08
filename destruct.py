@@ -18,7 +18,7 @@ __all__ = [
     # Bases.
     'Type', 'Context', 'Proxy',
     # Special types.
-    'Nothing', 'Static', 'RefPoint', 'Ref', 'Process',
+    'Nothing', 'Static', 'RefPoint', 'Ref', 'Process', 'Map',
     # Numeric types.
     'Int', 'UInt', 'Float', 'Double', 'Enum',
     # Data types.
@@ -112,6 +112,7 @@ class Nothing(Type):
     def emit(self, value, output, context):
         pass
 
+
 class Static(Type):
     def __init__(self, value):
         self.value = value
@@ -175,6 +176,23 @@ class Process(Type):
     def emit(self, value, output, context):
         if self.do_emit:
             value = self.do_emit(value)
+        return emit(self.child, value, output, context)
+
+class Map(Type):
+    def __init__(self, child=None, mapping={}):
+        self.child = child
+        self.mapping = mapping
+        self.reverse = {}
+        # Do it somewhat awkwardly to support all kinds of iterators
+        for k in mapping:
+            self.reverse[mapping[k]] = k
+
+    def parse(self, input, context):
+        value = parse(self.child, input, context)
+        return self.mapping.get(value, value)
+
+    def emit(self, value, output, context):
+        value = self.reverse.get(value, value)
         return emit(self.child, value, output, context)
 
 
