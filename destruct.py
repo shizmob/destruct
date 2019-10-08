@@ -573,6 +573,7 @@ class MetaStruct(type):
 class Struct(Type, metaclass=MetaStruct):
     _align = 0
     _union = False
+    _hide = []
 
     def __init__(self, *args, **kwargs):
         self.__ordered__ = collections.OrderedDict(self.__dict__)
@@ -653,18 +654,36 @@ class Struct(Type, metaclass=MetaStruct):
                     output.write('\x00' * amount)
                     nbytes += amount
                 n = nbytes
+
+            if name in self._hooks:
+                self._hooks[name](value, self._spec, context)
         
         context.parents.pop()
         
         output.seek(pos + n, os.SEEK_SET)
 
-    def __str__(self, fieldfunc=str):
+    def __iter__(self,):
         # Filter out fields we don't want to print: private (_xxx), const (XXX), methods
-        fields = [k for k in self.__ordered__ if not k.startswith('_') and not k[0].isupper() and not callable(getattr(self, k))]
-        # Format their values with fancy colouring according to type.
+        return (k for k in self.__ordered__ if not k.startswith('_') and not k[0].isupper() and not callable(getattr(self, k)))
+
+    def __eq__(self, other):
+        for k in self:
+            try:
+                ov = getattr(self, k)
+                tv = getattr(other, k)
+            except AttributeError:
+                return False
+            if ov != tv:
+                return False
+        return True
+
+    def __fmt__(self, fieldfunc):
+        # Format our values with fancy colouring according to type.
         args = []
-        for k in fields:
+        for k in self:
             val = getattr(self, k)
+            if val in self._hide:
+                continue
             val = format_value(val, fieldfunc, 2)
             args.append('  {}: {}'.format(k, val))
         args = ',\n'.join(args)
@@ -674,8 +693,11 @@ class Struct(Type, metaclass=MetaStruct):
         else:
             return '{} {{}}'.format(self.__class__.__name__)
 
+    def __str__(self):
+        return self.__fmt__(str)
+
     def __repr__(self):
-        return self.__str__(repr)
+        return self.__fmt__(repr)
 
 class Union(Struct, union=True):
     def __init__(self, *args, **kwargs):
