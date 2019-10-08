@@ -580,7 +580,7 @@ class Struct(Type, metaclass=MetaStruct):
         super().__init__()
         self._spec = copy.deepcopy(self._spec)
         for n in self._spec:
-            setattr(self, n, Nothing())
+            setattr(self, n, None)
         for n, v in kwargs.items():
             setattr(self, n, v)
 
