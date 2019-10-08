@@ -284,12 +284,13 @@ class Sig(Type):
 class Str(Type):
     type = str
 
-    def __init__(self, length=0, kind='c', exact=True, encoding='utf-8', length_type=UInt(8)):
+    def __init__(self, length=0, kind='c', elem_size=1, exact=True, encoding='utf-8', length_type=UInt(8)):
         self.length = length
         self.kind = kind
         self.exact = exact
         self.encoding = encoding
         self.length_type = length_type
+        self.elem_size = elem_size
 
     def parse(self, input, context):
         length = to_value(self.length, input, context)
@@ -302,15 +303,15 @@ class Str(Type):
             for i in itertools.count(start=1):
                 if length and i > length:
                     break
-                c = input.read(1)
-                if not c or (kind == 'c' and c == b'\x00'):
+                c = input.read(self.elem_size)
+                if not c or (kind == 'c' and c == b'\x00' * self.elem_size):
                     break
                 chars.append(c)
 
             if length and exact:
-                left = length - len(chars) - (kind == 'c' and c == b'\x00')
+                left = length - len(chars) - (kind == 'c' and c == b'\x00' * self.elem_size)
                 if left:
-                    input.read(left)
+                    input.read(left * self.elem_size)
 
             data = b''.join(chars)
         elif kind == 'pascal':
