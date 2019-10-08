@@ -247,15 +247,24 @@ class Double(Type):
 
 
 class Enum(Type):
-    def __init__(self, enum, child):
+    def __init__(self, enum, child, exhaustive=True):
         self.child = child
         self.enum = enum
+        self.exhaustive = exhaustive
 
     def parse(self, input, context):
-        return self.enum(parse(self.child, input, context))
+        val = parse(self.child, input, context)
+        try:
+            return self.enum(val)
+        except ValueError:
+            if self.exhaustive:
+                raise
+            return val
 
     def emit(self, value, output, context):
-        return to_parser(self.child).emit(value.value, output, context)
+        if isinstance(value, self.enum):
+            value = value.value
+        return emit(self.child, value, output, context)
 
 
 class Sig(Type):
