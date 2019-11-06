@@ -49,20 +49,23 @@ def format_value(f, formatter, indentation=0):
     if isinstance(f, (dict, collections.Mapping)):
         if f:
             fmt = '{{\n{}\n}}'
-            values = [indent(',\n'.join('{}: {}'.format(formatter(k), formatter(v)) for k, v in f.items()), 2, True)]
+            values = [indent(',\n'.join('{}: {}'.format(
+                format_value(k, formatter),
+                format_value(v, formatter)
+            ) for k, v in f.items()), 2, True)]
         else:
             fmt = '{{}}'
             values = []
     elif isinstance(f, (list, set, frozenset)):
         if f:
             fmt = '{{\n{}\n}}' if isinstance(f, (set, frozenset)) else '[\n{}\n]'
-            values = [indent(',\n'.join(formatter(v) for v in f), 2, True)]
+            values = [indent(',\n'.join(format_value(v, formatter) for v in f), 2, True)]
         else:
             fmt = '{{}}' if isinstance(f, (set, frozenset)) else '[]'
             values = []
     elif isinstance(f, bytes):
-        fmt = '[{}]'
-        values = [' '.join(hex(b)[2:].zfill(2) for b in f)]
+        fmt = '{}'
+        values = [format_bytes(f)]
     else:
         fmt = '{}'
         values = [formatter(f)]
@@ -124,6 +127,8 @@ class Nothing(Type):
     def emit(self, value, output, context):
         pass
 
+    def __repr__(self):
+        return '<{}>'.format(class_name(self))
 
 class Static(Type):
     def __init__(self, value):
@@ -134,6 +139,9 @@ class Static(Type):
 
     def emit(self, value, output, context):
         pass
+
+    def __repr__(self):
+        return '<{}({!r})>'.format(class_name(self), self.value)
 
 class RefPoint(Type):
     def __init__(self, default=None):
@@ -173,6 +181,9 @@ class Ref(Type):
         # TODO
         pass
 
+    def __repr__(self):
+        return '<{}: {!r} (offset={}, reference={})>'.format(class_name(self), self.child, self.offset, self.reference)
+
 class Process(Type):
     def __init__(self, child=None, parse=None, emit=None):
         self.child = child
@@ -190,6 +201,14 @@ class Process(Type):
             value = self.do_emit(value)
         return emit(self.child, value, output, context)
 
+    def __repr__(self):
+        return '<{}{}{}>'.format(
+            class_name(self),
+            ', parse: {}'.format(self.do_parse) if self.do_parse else '',
+            ', emit: {}'.format(self.do_emit) if self.do_emit else ''
+        )
+
+
 class Map(Type):
     def __init__(self, child=None, mapping={}):
         self.child = child
@@ -206,6 +225,9 @@ class Map(Type):
     def emit(self, value, output, context):
         value = self.reverse.get(value, value)
         return emit(self.child, value, output, context)
+
+    def __repr__(self):
+	return '<{}: {}>'.format(class_name(self), self.mapping)
 
 
 class GenericResolver:
@@ -319,6 +341,14 @@ class Int(Type):
             kind = kind.upper()
         return '{e}{k}'.format(e=endian, k=kind)
 
+    def __repr__(self):
+        return '<{}{}, {}, {}>'.format(
+            class_name(self),
+            self.n,
+            'unsigned' if not self.signed else 'signed',
+            self.order.upper()
+        )
+
 class UInt(Type):
     def __new__(self, *args, **kwargs):
         return Int(*args, signed=False, **kwargs)
@@ -337,6 +367,9 @@ class Float(Type):
         endian = ORDER_MAP[to_value(self.order, input, context)]
         kind = self.SIZE_MAP[to_value(self.n, input, context)]
         return '{e}{k}'.format(e=endian, k=kind)
+
+    def __repr__(self):
+        return '<{}{}, {}>'.format(class_name(self), self.n, self.order.upper())
 
 class Double(Type):
     def __new__(self, *args, **kwargs):
@@ -363,6 +396,8 @@ class Enum(Type):
             value = value.value
         return emit(self.child, value, output, context)
 
+    def __repr__(self):
+        return '<{}: {}>'.format(class_name(self), self.enum.__name__)
 
 class Sig(Type):
     def __init__(self, sequence):
@@ -377,6 +412,9 @@ class Sig(Type):
     
     def emit(self, value, output, context):
         output.write(to_value(self.sequence, output, context))
+
+    def __repr__(self):
+        return '<{}: {}>'.format(class_name(self), format_bytes(self.sequence))
 
 class Str(Type):
     type = str
@@ -447,7 +485,10 @@ class Str(Type):
         elif kind == 'pascal':
             output.write(chr(length))
             output.write(value)
-            
+
+    def __repr__(self):
+        return '<{}({})>'.format(class_name(self), self.kind)
+
 
 class Pad(Type):
     BLOCK_SIZE = 2048
@@ -481,6 +522,9 @@ class Pad(Type):
         if remainder:
             output.write(value[:remainder])
 
+    def __repr__(self):
+        return '<{}: {} * {}>'.format(class_name(self), self.length, format_bytes(self.value))
+
 class Data(Type):
     type = bytes
 
@@ -497,6 +541,8 @@ class Data(Type):
     def emit(self, value, output, context):
         output.write(value)
 
+    def __repr__(self):
+        return '<{}{}>'.format(class_name(self), ': ' + str(self.length) if self.length is not None else '')
 
 class DateTime(Type):
     def __init__(self, child=None, format=None, timestamp=False, timezone=datetime.timezone.utc):
@@ -519,6 +565,8 @@ class DateTime(Type):
             val = value.strftime(self.format)
         return emit(self.child, val, output, context)
 
+    def __repr__(self):
+        return '<{}: {}>'.format(class_name(self), 'UNIX timestamp' if self.timestamp else self.format)
 
 
 def proxy_magic_method(name, type=None):
@@ -873,6 +921,9 @@ class Tuple(Type):
             except Exception as e:
                 propagate_exception(e, '[index {}]'.format(i))
 
+    def __repr__(self):
+        return '<{}({})>'.format(class_name(self), ', '.join(repr(c) for c in self.children))
+
 class Switch(Type):
     def __init__(self, default=None, **kwargs):
         self.options = kwargs
@@ -896,6 +947,8 @@ class Switch(Type):
             ))
         return emit(self.options[self.selector], value, output, context)
 
+    def __repr__(self):
+        return '<{}: {}>'.format(class_name(self), ', '.join(k + '=' + repr(v) for k, v in self.options))
 
 class Maybe(Type):
     def __init__(self, child):
@@ -914,6 +967,9 @@ class Maybe(Type):
         if value is None:
             return
         return emit(self.child, value, output, context)
+
+    def __repr__(self):
+        return '<{!r}?>'.format(self.child)
 
 class Any(Type):
     def __init__(self, children):
@@ -962,6 +1018,9 @@ class Any(Type):
                 message = '{}\n{}'.format(first, '\n'.join('  {}'.format(line) for line in others.split('\n')))
             messages.append('- {}: {}: {}'.format(type(c).__name__, type(e).__name__, message))
         raise ValueError('Expected any of the following, nothing matched:\n{}'.format('\n'.join(messages)))
+
+    def __repr__(self):
+        return '<{}[{}]>'.format(class_name(self), ', '.join(repr(c) for c in self.children))
 
 class Arr(Type):
     def __init__(self, child, count=-1, max_length=-1, stop_value=None, pad_count=0, pad_to=0):
@@ -1038,6 +1097,9 @@ class Arr(Type):
                 padding = pad_to - (diff % pad_to)
                 if padding != pad_to:
                     output.write('\x00' * padding)
+
+    def __repr__(self):
+        return '<[]{!r}>'.format(self.child)
 
 
 def to_input(input):
