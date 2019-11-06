@@ -19,7 +19,7 @@ __all__ = [
     # Bases.
     'Type', 'Context', 'Proxy',
     # Special types.
-    'Nothing', 'Static', 'RefPoint', 'Ref', 'Process', 'Map', 'Capped',
+    'Nothing', 'Static', 'RefPoint', 'Ref', 'Process', 'Map', 'Capped', 'Generic',
     # Numeric types.
     'Int', 'UInt', 'Float', 'Double', 'Enum',
     # Data types.
@@ -75,6 +75,17 @@ def propagate_exception(e, prefix):
     except:
         e = ValueError('{}: {}: {}'.format(prefix, type(e).__name__, e))
     raise e.with_traceback(traceback) from None
+
+def format_bytes(bs):
+    return '[' + ' '.join(hex(b)[2:].zfill(2) for b in bs) + ']'
+
+def class_name(s: object):
+    return s.__class__.__module__ + '.'  + s.__class__.__qualname__
+
+def friendly_name(s: object) -> str:
+    if hasattr(s, '__name__'):
+        return s.__name__
+    return str(s)
 
 
 class Context:
@@ -195,6 +206,37 @@ class Map(Type):
     def emit(self, value, output, context):
         value = self.reverse.get(value, value)
         return emit(self.child, value, output, context)
+
+
+class GenericResolver:
+    def __init__(self):
+        self.results = []
+
+    def resolve(self, c):
+        self.results.append(c)
+
+class Generic(Type):
+    def __init__(self, target):
+        target.resolve(self)
+        self.child = []
+
+    def parse(self, input, context):
+        if not self.child:
+            raise ValueError('unresolved generic')
+        return parse(self.child[-1], input, context)
+
+    def emit(self, value, output, context):
+        if not self.child:
+            raise ValueError('unresolved generic')
+        return emit(self.child[-1], value, output, context)
+
+    def __repr__(self):
+        if self.child:
+            return '<{} @ 0x{:x}: {!r}>'.format(class_name(self), id(self), self.child[-1])
+        return '<{} @ 0x{:x}: unresolved>'.format(class_name(self), id(self))
+
+    def __deepcopy__(self, memo):
+        return self
 
 
 class CappedFile:
@@ -593,9 +635,11 @@ class MetaSpec(collections.OrderedDict):
 
 class MetaStruct(type):
     @classmethod
-    def __prepare__(cls, name, bases, **kwargs):
+    def __prepare__(mcls, name, bases, **kwargs):
         attrs = MetaSpec({'_' + k: v for k, v in kwargs.items()})
         attrs['self'] = Proxy(attrs)
+        attrs['_'] = GenericResolver()
+        attrs.update({k: globals().get(k) for k in __all__ if k[0].isupper()})
         return attrs
 
     def __new__(cls, name, bases, attrs, **kwargs):
@@ -606,14 +650,22 @@ class MetaStruct(type):
             spec.update(getattr(base, '_spec', {}))
             hooks.update(getattr(base, '_hooks', {}))
 
+        del attrs['self']
+        for k in __all__:
+            if k[0].isupper():
+                del attrs[k]
+
+        attrs['_generics'] = getattr(base, '_generics', collections.OrderedDict()).copy()
+        resolver = attrs.pop('_')
+        for g in resolver.results:
+            attrs['_generics'][g] = None
+
         for key, value in attrs.copy().items():
             if key.startswith('on_'):
                 hkey = key.replace('on_', '', 1)
                 hooks[hkey] = value
                 del attrs[key]
-            elif key == 'self' and isinstance(value, Proxy):
-                del attrs[key]
-            elif isinstance(value, Type) or value is None:
+            elif isinstance(value, Type) or (inspect.isclass(value) and issubclass(value, Type)) or value is None:
                 spec[key] = value
                 del attrs[key]
 
@@ -625,10 +677,30 @@ class MetaStruct(type):
     def __init__(cls, *args, **kwargs):
         return type.__init__(cls, *args)
 
+    def __getitem__(cls, ty):
+        if not isinstance(ty, tuple):
+            ty = (ty,)
+
+        amount = len(ty)
+        if amount > len(cls._generics):
+            raise TypeError('too many generics arguments for {}: {}'.format(
+                cls.__name__, amount
+            ))
+
+        new_name = '{}[{}]'.format(cls.__name__, ', '.join(friendly_name(r) for r in ty))
+        new = type(new_name, (cls,), cls.__class__.__prepare__(new_name, (cls,)))
+        generics = collections.OrderedDict()
+        for g, child in zip(cls._generics, ty):
+            generics[g] = child
+        new._generics = generics
+        return new
+
+
 class Struct(Type, metaclass=MetaStruct):
     _align = 0
     _union = False
     _hide = []
+    _generics = collections.OrderedDict()
 
     def __init__(self, *args, **kwargs):
         self.__ordered__ = collections.OrderedDict(self.__dict__)
@@ -649,6 +721,9 @@ class Struct(Type, metaclass=MetaStruct):
         pos = input.tell()
 
         context.parents.append(self)
+
+        for g, child in self._generics.items():
+            g.child.append(child)
 
         for name, parser in self._spec.items():
             if parser is None:
@@ -678,7 +753,10 @@ class Struct(Type, metaclass=MetaStruct):
             setattr(self, name, val)
             if name in self._hooks:
                 self._hooks[name](self, self._spec, context)
-        
+
+        for g in self._generics:
+            g.child.pop()
+
         context.parents.pop()
 
         input.seek(pos + n, os.SEEK_SET)
