@@ -533,6 +533,8 @@ class Data(Type):
 
     def parse(self, input, context):
         length = to_value(self.length, input, context)
+        if length is None:
+            length = -1
         data = input.read(length)
         if length >= 0 and len(data) != length:
             raise ValueError('Data length too little (expected {}, got {})!'.format(length, len(data)))
