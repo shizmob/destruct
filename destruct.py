@@ -1105,7 +1105,7 @@ class Arr(Type):
 
 
 def to_input(input):
-    if not isinstance(input, io.IOBase):
+    if isinstance(input, (bytes, bytearray)):
         input = io.BytesIO(input)
     return input
 
