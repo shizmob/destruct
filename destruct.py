@@ -12,13 +12,14 @@ import itertools
 import struct
 import copy
 import datetime
+import errno
 
 
 __all__ = [
     # Bases.
     'Type', 'Context', 'Proxy',
     # Special types.
-    'Nothing', 'Static', 'RefPoint', 'Ref', 'Process', 'Map',
+    'Nothing', 'Static', 'RefPoint', 'Ref', 'Process', 'Map', 'Capped',
     # Numeric types.
     'Int', 'UInt', 'Float', 'Double', 'Enum',
     # Data types.
@@ -194,6 +195,60 @@ class Map(Type):
     def emit(self, value, output, context):
         value = self.reverse.get(value, value)
         return emit(self.child, value, output, context)
+
+
+class CappedFile:
+    def __init__(self, file, max):
+        self._file = file
+        self._pos = 0
+        self._max = max
+        self._start = file.tell()
+
+    def read(self, n=-1):
+        remaining = self._max - self._pos
+        if n < 0:
+            n = remaining
+        n = min(n, remaining)
+        self._pos += n
+        return self._file.read(n)
+
+    def write(self, data):
+        remaining = self._max - self._pos
+        if len(data) > remaining:
+            raise ValueError('trying to write past limit by {} bytes'.format(len(data) - remaining))
+        self._pos += len(data)
+        return self._file.write(data)
+
+    def seek(self, offset, whence):
+        if whence == os.SEEK_SET:
+            pos = offset
+        elif whence == os.SEEK_CUR:
+            pos = self._start + self._pos + offset
+        elif whence == os.SEEK_SET:
+            pos = self._start + self._max - offset
+        if pos < self._start:
+            raise OSError(errno.EINVAL, os.strerror(errno.EINVAL), offset)
+        self._pos = pos - self._start
+        return self._file.seek(pos, os.SEEK_SET)
+
+    def __getattr__(self, n):
+        return getattr(self._file, n)
+
+class Capped(Type):
+    def __init__(self, child, limit=None):
+        self.child = child
+        self.limit = limit
+
+    def parse(self, input, context):
+        capped = CappedFile(input, self.limit)
+        return parse(self.child, capped, context)
+
+    def emit(self, value, output, context):
+        capped = CappedFile(output, self.limit)
+        return emit(self.child, value, capped, context)
+
+    def __repr__(self):
+        return '<{}: {!r} (limit={})>'.format(class_name(self), self.child, self.limit)
 
 
 ORDER_MAP = {
