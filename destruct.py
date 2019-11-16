@@ -227,7 +227,7 @@ class Map(Type):
         return emit(self.child, value, output, context)
 
     def __repr__(self):
-	return '<{}: {}>'.format(class_name(self), self.mapping)
+        return '<{}: {}>'.format(class_name(self), self.mapping)
 
 
 class GenericResolver:
