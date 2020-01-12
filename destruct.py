@@ -2,7 +2,6 @@
 destruct
 A struct parsing library.
 """
-import sys
 import os
 import io
 import types
@@ -13,6 +12,7 @@ import struct
 import copy
 import datetime
 import errno
+from contextlib import contextmanager
 
 
 __all__ = [
@@ -71,30 +71,71 @@ def format_value(f, formatter, indentation=0):
         values = [formatter(f)]
     return indent(fmt.format(*values), indentation)
 
-def propagate_exception(e, prefix):
-    traceback = sys.exc_info()[2]
-    try:
-        e = type(e)('{}: {}'.format(prefix, e))
-    except:
-        e = ValueError('{}: {}: {}'.format(prefix, type(e).__name__, e))
-    raise e.with_traceback(traceback) from None
-
 def format_bytes(bs):
     return '[' + ' '.join(hex(b)[2:].zfill(2) for b in bs) + ']'
 
-def class_name(s: object):
-    return s.__class__.__module__ + '.'  + s.__class__.__qualname__
+def format_path(path):
+    s = ''
+    first = True
+    for p in path:
+        sep = '.'
+        if isinstance(p, int):
+            p = '[' + str(p) + ']'
+            sep = ''
+        if sep and not first:
+            s += sep
+        s += p
+        first = False
+    return s
+
+def class_name(s: object, module_whitelist=['builtins']):
+    module = s.__class__.__module__
+    name = s.__class__.__qualname__
+    if module in module_whitelist:
+        return name
+    return module + '.' + name
 
 def friendly_name(s: object) -> str:
     if hasattr(s, '__name__'):
         return s.__name__
     return str(s)
 
+@contextmanager
+def seeking(fd, pos, whence=os.SEEK_SET):
+    oldpos = fd.tell()
+    fd.seek(pos, whence)
+    try:
+        yield fd
+    finally:
+        fd.seek(oldpos, os.SEEK_SET)
+
 
 class Context:
-    def __init__(self):
-        self.parents = []
+    __slots__ = ('root', 'value', 'path', 'user', 'size')
+
+    def __init__(self, root, value=None):
+        self.root = root
+        self.value = value
+        self.path = []
         self.user = types.SimpleNamespace()
+        self.size = None
+
+    @contextmanager
+    def enter(self, name, parser):
+        self.path.append((name, parser))
+        yield
+        self.path.pop()
+
+    @contextmanager
+    def add_ref(self, size):
+        if self.size is None:
+            self.size = sizeof(self.root, self.value)
+        offset = self.size
+        yield offset
+        self.size += size
+
+    def format_path(self):
+        return format_path(name for name, parser in self.path)
 
 
 class Type:
@@ -119,6 +160,9 @@ class Type:
         else:
             raise NotImplementedError
 
+    def sizeof(self, value, context):
+        return None
+
 
 class Nothing(Type):
     def parse(self, input, context):
@@ -126,6 +170,9 @@ class Nothing(Type):
     
     def emit(self, value, output, context):
         pass
+
+    def sizeof(self, value, context):
+        return 0
 
     def __repr__(self):
         return '<{}>'.format(class_name(self))
@@ -140,46 +187,53 @@ class Static(Type):
     def emit(self, value, output, context):
         pass
 
+    def sizeof(self, value, context):
+        return 0
+
     def __repr__(self):
         return '<{}({!r})>'.format(class_name(self), self.value)
 
 class RefPoint(Type):
-    def __init__(self, default=None):
-        self.pos = default
+    def __init__(self, child, reference=None):
+        self.child = child
+        self.reference = reference
 
     def parse(self, input, context):
-        self.pos = input.tell()
-        return self.pos
+        if self.reference is not None:
+            pos = input.tell() + self.reference
+        else:
+            pos = 0
+        pos += parse(self.child, input, context)
+        return pos
 
     def emit(self, value, output, context):
-        pass
+        pos = value
+        if self.reference is not None:
+            pos -= input.tell() + reference
+        return emit(self.child, pos, input, context)
+
+    def sizeof(self, value, context):
+        return sizeof(self.child, value, context)
 
 class Ref(Type):
-    def __init__(self, child, offset=0, reference=None, reset=True):
+    def __init__(self, point, child):
+        self.point = point
         self.child = child
-        self.offset = offset
-        self.reference = reference
-        self.reset = reset
 
     def parse(self, input, context):
-        offset = to_value(self.offset, input, context)
-        reference = to_value(self.reference, input, context)
+        point = to_value(self.point, input, context)
 
-        pos = input.tell()
-        if reference is not None:
-            input.seek(reference + offset, os.SEEK_SET)
-        else:
-            input.seek(offset, os.SEEK_CUR)
-
-        try:
-            return parse(self.child, input, context)
-        finally:
-            if to_value(self.reset, input, context):
-                input.seek(pos, os.SEEK_SET)
+        with seeking(input, point) as f:
+            return parse(self.child, f, context)
 
     def emit(self, value, output, context):
-        # TODO
-        pass
+        point = to_value(self.point, output, context)
+
+        with seeking(output, point) as f:
+            return emit(self.child, value, f, context)
+
+    def sizeof(self, value, context):
+        return 0 # sizeof(self.child, value, context)
 
     def __repr__(self):
         return '<{}: {!r} (offset={}, reference={})>'.format(class_name(self), self.child, self.offset, self.reference)
@@ -200,6 +254,9 @@ class Process(Type):
         if self.do_emit:
             value = self.do_emit(value)
         return emit(self.child, value, output, context)
+
+    def sizeof(self, value, context):
+        return sizeof(self.child, value, context)
 
     def __repr__(self):
         return '<{}{}{}>'.format(
@@ -226,6 +283,10 @@ class Map(Type):
         value = self.reverse.get(value, value)
         return emit(self.child, value, output, context)
 
+    def sizeof(self, value, context):
+        value = self.reverse.get(value, value)
+        return sizeof(self.child, value, context)
+
     def __repr__(self):
         return '<{}: {}>'.format(class_name(self), self.mapping)
 
@@ -251,6 +312,9 @@ class Generic(Type):
         if not self.child:
             raise ValueError('unresolved generic')
         return emit(self.child[-1], value, output, context)
+
+    def sizeof(self, value, context):
+        return sizeof(self.child[-1], value, context)
 
     def __repr__(self):
         if self.child:
@@ -311,6 +375,14 @@ class Capped(Type):
         capped = CappedFile(output, self.limit)
         return emit(self.child, value, capped, context)
 
+    def sizeof(self, value, context):
+        child = sizeof(self.child, value, context)
+        if child is None:
+            return self.limit
+        if self.limit is None:
+            return child
+        return min(child, self.limit)
+
     def __repr__(self):
         return '<{}: {!r} (limit={})>'.format(class_name(self), self.child, self.limit)
 
@@ -341,6 +413,9 @@ class Int(Type):
             kind = kind.upper()
         return '{e}{k}'.format(e=endian, k=kind)
 
+    def sizeof(self, value, context):
+        return self.n // 8
+
     def __repr__(self):
         return '<{}{}, {}, {}>'.format(
             class_name(self),
@@ -367,6 +442,9 @@ class Float(Type):
         endian = ORDER_MAP[to_value(self.order, input, context)]
         kind = self.SIZE_MAP[to_value(self.n, input, context)]
         return '{e}{k}'.format(e=endian, k=kind)
+
+    def sizeof(self, value, context):
+        return self.n // 8
 
     def __repr__(self):
         return '<{}{}, {}>'.format(class_name(self), self.n, self.order.upper())
@@ -396,6 +474,11 @@ class Enum(Type):
             value = value.value
         return emit(self.child, value, output, context)
 
+    def sizeof(self, value, context):
+        if isinstance(value, self.enum):
+            value = value.value
+        return sizeof(self.child, value, context)
+
     def __repr__(self):
         return '<{}: {}>'.format(class_name(self), self.enum.__name__)
 
@@ -412,6 +495,9 @@ class Sig(Type):
     
     def emit(self, value, output, context):
         output.write(to_value(self.sequence, output, context))
+
+    def sizeof(self, value, context):
+        return len(self.sequence)
 
     def __repr__(self):
         return '<{}: {}>'.format(class_name(self), format_bytes(self.sequence))
@@ -486,6 +572,25 @@ class Str(Type):
             output.write(chr(length))
             output.write(value)
 
+    def sizeof(self, value, context):
+        if self.length and self.exact:
+            base = self.length
+        elif value is not None:
+            base = len(value)
+        else:
+            return None
+
+        if self.kind == 'pascal':
+            size_len = sizeof(self.length_type, base, context)
+            if size_len is None:
+                return None
+        elif self.kind == 'c' and not self.exact:
+            size_len = self.elem_size
+        else:
+            size_len = 0
+
+        return base * self.elem_size + size_len
+
     def __repr__(self):
         return '<{}({})>'.format(class_name(self), self.kind)
 
@@ -522,6 +627,11 @@ class Pad(Type):
         if remainder:
             output.write(value[:remainder])
 
+    def sizeof(self, value, context):
+        if self.reference is not None:
+            return None
+        return self.length
+
     def __repr__(self):
         return '<{}: {} * {}>'.format(class_name(self), self.length, format_bytes(self.value))
 
@@ -542,6 +652,13 @@ class Data(Type):
     
     def emit(self, value, output, context):
         output.write(value)
+
+    def sizeof(self, value, context):
+        if self.length is None or self.length < 0:
+            if value is not None:
+                return len(value)
+            return None
+        return self.length
 
     def __repr__(self):
         return '<{}{}>'.format(class_name(self), ': ' + str(self.length) if self.length is not None else '')
@@ -566,6 +683,12 @@ class DateTime(Type):
         else:
             val = value.strftime(self.format)
         return emit(self.child, val, output, context)
+
+    def sizeof(self, value, context):
+        if self.timestamp:
+            return sizeof(self.child, value.timestamp(), context)
+        else:
+            return sizeof(self.child, value.strftime(self.format), context)
 
     def __repr__(self):
         return '<{}: {}>'.format(class_name(self), 'UNIX timestamp' if self.timestamp else self.format)
@@ -722,10 +845,10 @@ class MetaStruct(type):
         attrs['_spec'] = spec
         attrs['_hooks'] = hooks
 
-        return type.__new__(cls, name, bases, attrs)
+        return super().__new__(cls, name, bases, attrs)
 
     def __init__(cls, *args, **kwargs):
-        return type.__init__(cls, *args)
+        return super().__init__(*args)
 
     def __getitem__(cls, ty):
         if not isinstance(ty, tuple):
@@ -770,8 +893,6 @@ class Struct(Type, metaclass=MetaStruct):
         n = 0
         pos = input.tell()
 
-        context.parents.append(self)
-
         for g, child in self._generics.items():
             g.child.append(child)
 
@@ -780,34 +901,30 @@ class Struct(Type, metaclass=MetaStruct):
                 setattr(self, name, None)
 
         for name, parser in self._spec.items():
-            if parser is None:
-                continue
-            if self._union:
-                input.seek(pos, os.SEEK_SET)
+            with context.enter(name, parser):
+                if parser is None:
+                    continue
+                if self._union:
+                    input.seek(pos, os.SEEK_SET)
 
-            try:
                 val = parse(parser, input, context)
-            except Exception as e:
-                propagate_exception(e, name)
 
-            nbytes = input.tell() - pos
-            if self._union:
-                n = max(n, nbytes)
-            else:
-                if self._align:
-                    amount = self._align - (nbytes % self._align)
-                    input.seek(amount, os.SEEK_CUR)
-                    nbytes += amount
-                n = nbytes
+                nbytes = input.tell() - pos
+                if self._union:
+                    n = max(n, nbytes)
+                else:
+                    if self._align:
+                        amount = self._align - (nbytes % self._align)
+                        input.seek(amount, os.SEEK_CUR)
+                        nbytes += amount
+                    n = nbytes
 
-            setattr(self, name, val)
-            if name in self._hooks:
-                self._hooks[name](self, self._spec, context)
+                setattr(self, name, val)
+                if name in self._hooks:
+                    self._hooks[name](self, self._spec, context)
 
         for g in self._generics:
             g.child.pop()
-
-        context.parents.pop()
 
         input.seek(pos + n, os.SEEK_SET)
         return self
@@ -816,38 +933,63 @@ class Struct(Type, metaclass=MetaStruct):
         n = 0
         pos = output.tell()
 
-        context.parents.append(self)
-
         for name, parser in self._spec.items():
-            if self._union:
-                output.seek(pos, os.SEEK_SET)
+            with context.enter(name, parser):
+                if self._union:
+                    output.seek(pos, os.SEEK_SET)
 
-            field = getattr(value, name)
-            try:
+                field = getattr(value, name)
                 emit(parser, field, output, context)
-            except Exception as e:
-                propagate_exception(e, name)
-            
-            nbytes = output.tell() - pos
-            if self._union:
-                n = max(n, nbytes)
-            else:
-                if self._align:
-                    amount = self._align - (nbytes % self._align)
-                    output.write('\x00' * amount)
-                    nbytes += amount
-                n = nbytes
 
-            if name in self._hooks:
-                self._hooks[name](value, self._spec, context)
-        
-        context.parents.pop()
-        
+                nbytes = output.tell() - pos
+                if self._union:
+                    n = max(n, nbytes)
+                else:
+                    if self._align:
+                        amount = self._align - (nbytes % self._align)
+                        output.write('\x00' * amount)
+                        nbytes += amount
+                    n = nbytes
+
+                if name in self._hooks:
+                    self._hooks[name](value, self._spec, context)
+
+        for g in self._generics:
+            g.child.pop()
+
         output.seek(pos + n, os.SEEK_SET)
 
-    def __iter__(self,):
+    def sizeof(self, value, context):
+        n = 0
+
+        for g, child in self._generics.items():
+            g.child.append(child)
+
+        for name, parser in self._spec.items():
+            with context.enter(name, parser):
+                if value:
+                    field = getattr(value, name)
+                else:
+                    field = None
+
+                nbytes = sizeof(parser, field, context)
+                if nbytes is None:
+                    n = None
+                    break
+
+                if self._union:
+                    n = max(n, nbytes)
+                else:
+                    if self._align:
+                        amount = self._align - (nbytes % self._align)
+                        nbytes += amount
+                    n += nbytes
+
+        return n
+
+    def __iter__(self):
         # Filter out fields we don't want to print: private (_xxx), const (XXX), methods
-        return (k for k in self.__ordered__ if not k.startswith('_') and not k[0].isupper() and not callable(getattr(self, k)))
+        return (k for k in self.__ordered__ if not k.startswith('__') and k != '_spec' and not k[0].isupper() and not callable(getattr(self, k)))
 
     def __eq__(self, other):
         for k in self:
@@ -859,6 +1001,9 @@ class Struct(Type, metaclass=MetaStruct):
             if ov != tv:
                 return False
         return True
+
+    def __hash__(self):
+        return hash(tuple(self))
 
     def __fmt__(self, fieldfunc):
         # Format our values with fancy colouring according to type.
@@ -910,18 +1055,29 @@ class Tuple(Type):
     def parse(self, input, context):
         vals = []
         for i, child in enumerate(self.children):
-            try:
+            with context.enter(i, child):
                 vals.append(parse(child, input, context))
-            except Exception as e:
-                propagate_exception(e, '[index {}]'.format(i))
         return vals
 
     def emit(self, value, output, context):
         for i, (child, val) in enumerate(zip(self.children, value)):
-            try:
+            with context.enter(i, child):
                 emit(child, val, output, context)
-            except Exception as e:
-                propagate_exception(e, '[index {}]'.format(i))
+
+    def sizeof(self, value, context):
+        n = 0
+        if value is None:
+            value = [None] * len(self.children)
+
+        for i, (child, val) in enumerate(zip(self.children, value)):
+            with context.enter(i, child):
+                nbytes = sizeof(child, val, context)
+                if nbytes is None:
+                    n = None
+                    break
+                n += nbytes
+
+        return n
 
     def __repr__(self):
         return '<{}({})>'.format(class_name(self), ', '.join(repr(c) for c in self.children))
@@ -949,6 +1105,15 @@ class Switch(Type):
             ))
         return emit(self.options[self.selector], value, output, context)
 
+    def sizeof(self, value, context):
+        if self.selector is None:
+            raise ValueError('Selector not set!')
+        if self.selector not in self.options:
+            raise ValueError('Selector {} is invalid! [options: {}]'.format(
+                self.selector, ', '.join(self.options.keys())
+            ))
+        return sizeof(self.options[self.selector], value, context)
+
     def __repr__(self):
         return '<{}: {}>'.format(class_name(self), ', '.join(k + '=' + repr(v) for k, v in self.options))
 
@@ -969,6 +1134,11 @@ class Maybe(Type):
         if value is None:
             return
         return emit(self.child, value, output, context)
+
+    def sizeof(self, value, context):
+        if value is None:
+            return 0
+        return sizeof(self.child, value, context)
 
     def __repr__(self):
         return '<{!r}?>'.format(self.child)
@@ -1047,32 +1217,33 @@ class Arr(Type):
         while count < 0 or i < count:
             if max_length >= 0 and input.tell() - pos >= max_length:
                 break
+
             start = input.tell()
             child = to_parser(self.child, i)
+            with context.enter(i, child):
+                try:
+                    v = parse(child, input, context)
+                except:
+                    # Check EOF.
+                    if input.read(1) == b'':
+                        break
+                    input.seek(-1, os.SEEK_CUR)
+                    raise
 
-            try:
-                v = parse(child, input, context)
-            except Exception as e:
-                # Check EOF.
-                if input.read(1) == b'':
+                if pad_count:
+                    input.seek(pad_count, os.SEEK_CUR)
+
+                if pad_to:
+                    diff = input.tell() - start
+                    padding = pad_to - (diff % pad_to)
+                    if padding != pad_to:
+                        input.seek(padding, os.SEEK_CUR)
+
+                if v == stop_value or (max_length >= 0 and input.tell() - pos > max_length):
                     break
-                input.seek(-1, os.SEEK_CUR)
-                propagate_exception(e, '[index {}]'.format(i))
 
-            if pad_count:
-                input.seek(pad_count, os.SEEK_CUR)
-
-            if pad_to:
-                diff = input.tell() - start
-                padding = pad_to - (diff % pad_to)
-                if padding != pad_to:
-                    input.seek(padding, os.SEEK_CUR)
-
-            if v == stop_value or (max_length >= 0 and input.tell() - pos > max_length):
-                break
-
-            res.append(v)
-            i += 1
+                res.append(v)
+                i += 1
 
         return res
     
@@ -1087,18 +1258,48 @@ class Arr(Type):
         for i, elem in enumerate(value):
             start = output.tell()
             child = to_parser(self.child, i)
-            try:
+
+            with context.enter(i, child):
                 emit(child, elem, output, context)
-            except Exception as e:
-                propagate_exception(e, '[index {}]'.format(i))
-            
-            if pad_count:
-                output.write('\x00' * pad_count)
-            if pad_to:
-                diff = output.tell() - start
-                padding = pad_to - (diff % pad_to)
-                if padding != pad_to:
-                    output.write('\x00' * padding)
+                if pad_count:
+                    output.write('\x00' * pad_count)
+                if pad_to:
+                    diff = output.tell() - start
+                    padding = pad_to - (diff % pad_to)
+                    if padding != pad_to:
+                        output.write('\x00' * padding)
+
+    def sizeof(self, value, context):
+        if self.count >= 0:
+            length = self.count
+        elif value is not None:
+            length = len(value) + (1 if self.stop_value else 0)
+        else:
+            return None
+
+        n = 0
+        if value is None:
+            value = [None] * length
+        for i, v in enumerate(itertools.chain(value, [self.stop_value])):
+            if i >= length:
+                break
+
+            child = to_parser(self.child, i)
+            with context.enter(i, child):
+                nbytes = sizeof(self.child, v, context)
+                if nbytes is None:
+                    n = None
+                    break
+
+                if self.pad_count:
+                    nbytes += self.pad_count
+                if self.pad_to:
+                    padding = self.pad_to - (nbytes % self.pad_to)
+                    if padding != self.pad_to:
+                        nbytes += padding
+                n += nbytes
+
+        return n
 
     def __repr__(self):
         return '<[]{!r}>'.format(self.child)
@@ -1126,8 +1327,65 @@ def to_value(p, input, context):
         return p.parse(input, context)
     return p
 
+
+class DestructError(Exception):
+    def __init__(self, context, inner):
+        super().__init__()
+        self.context = context
+        self.inner = inner
+
+    def __str__(self):
+        return '[{}]: {}: {}'.format(
+            self.context.format_path(), class_name(self.inner), str(self.inner)
+        )
+
+    def __repr__(self):
+        return '{}(context={!r}, inner={!r})'.format(
+            class_name(self), self.context, self.inner
+        )
+
+class ParseError(DestructError):
+    pass
+
+class EmitError(DestructError):
+    pass
+
+class SizeError(DestructError):
+    pass
+
 def parse(spec, input, context=None):
-    return to_parser(spec).parse(to_input(input), context or Context())
+    parser = to_parser(spec)
+    ctx = context or Context(parser)
+    try:
+        return parser.parse(to_input(input), ctx)
+    except Exception as e:
+        if not context:
+            raise ParseError(ctx, e)
+        else:
+            raise
 
 def emit(spec, value, output, context=None):
-    return to_parser(spec).emit(value, to_input(output), context or Context())
+    parser = to_parser(spec)
+    ctx = context or Context(parser, value)
+    try:
+        return parser.emit(value, to_input(output), ctx)
+    except Exception as e:
+        if not context:
+            raise EmitError(ctx, e)
+        else:
+            raise
+
+def sizeof(spec, value, context=None):
+    parser = to_parser(spec)
+    ctx = context or Context(parser, value)
+    try:
+        s = parser.sizeof(value, ctx)
+    except Exception as e:
+        if not context:
+            raise SizeError(ctx, e)
+        else:
+            raise
+
+    if s is None:
+        raise ValueError('size was None')
+    return s
