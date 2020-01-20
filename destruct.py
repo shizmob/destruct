@@ -216,20 +216,21 @@ class RefPoint(Type):
         return sizeof(self.child, value, context)
 
 class Ref(Type):
-    def __init__(self, point, child):
-        self.point = point
+    def __init__(self, child, point=None, reference=os.SEEK_SET):
         self.child = child
+        self.point = point
+        self.reference = reference
 
     def parse(self, input, context):
         point = to_value(self.point, input, context)
 
-        with seeking(input, point) as f:
+        with seeking(input, point, self.reference) as f:
             return parse(self.child, f, context)
 
     def emit(self, value, output, context):
         point = to_value(self.point, output, context)
 
-        with seeking(output, point) as f:
+        with seeking(output, point, self.reference) as f:
             return emit(self.child, value, f, context)
 
     def sizeof(self, value, context):
