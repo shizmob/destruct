@@ -304,6 +304,15 @@ class Generic(Type):
         target.resolve(self)
         self.child = []
 
+    def resolve(self, v):
+        if isinstance(v, Generic):
+            self.child.append(v.child[-1])
+        else:
+            self.child.append(v)
+
+    def pop(self):
+        self.child.pop()
+
     def parse(self, input, context):
         if not self.child:
             raise ValueError('unresolved generic')
@@ -316,6 +325,9 @@ class Generic(Type):
 
     def sizeof(self, value, context):
         return sizeof(self.child[-1], value, context)
+
+    def to_value(self):
+        return self.child[-1]
 
     def __repr__(self):
         if self.child:
@@ -492,7 +504,7 @@ class Enum(Type):
     def parse(self, input, context):
         val = parse(self.child, input, context)
         try:
-            return self.enum(val)
+            return to_value(self.enum, input, context)(val)
         except ValueError:
             if self.exhaustive:
                 raise
@@ -923,7 +935,7 @@ class Struct(Type, metaclass=MetaStruct):
         pos = input.tell()
 
         for g, child in self._generics.items():
-            g.child.append(child)
+            g.resolve(child)
 
         for name, parser in self._spec.items():
             if parser is None:
@@ -953,7 +965,7 @@ class Struct(Type, metaclass=MetaStruct):
                     self._hooks[name](self, self._spec, context)
 
         for g in self._generics:
-            g.child.pop()
+            g.pop()
 
         input.seek(pos + n, os.SEEK_SET)
         return self
@@ -1352,6 +1364,8 @@ def to_parser(spec, ident=None):
     raise ValueError('Could not figure out specification from argument {}.'.format(spec))
 
 def to_value(p, input, context):
+    if isinstance(p, Generic):
+        return p.to_value()
     if isinstance(p, Type):
         return p.parse(input, context)
     return p
