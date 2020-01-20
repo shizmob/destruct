@@ -1421,7 +1421,7 @@ def emit(spec, value, output, context=None):
         else:
             raise
 
-def sizeof(spec, value, context=None):
+def sizeof(spec, value=None, context=None):
     parser = to_parser(spec)
     ctx = context or Context(parser, value)
     try:
