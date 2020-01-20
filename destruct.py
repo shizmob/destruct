@@ -1059,6 +1059,8 @@ class Struct(Type, metaclass=MetaStruct):
         # Format our values with fancy colouring according to type.
         args = []
         for k in self:
+            if k.startswith('_'):
+                continue
             val = getattr(self, k)
             if val in self._hide:
                 continue
