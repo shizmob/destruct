@@ -1135,39 +1135,31 @@ class Tuple(Type):
         return '<{}({})>'.format(class_name(self), ', '.join(repr(c) for c in self.children))
 
 class Switch(Type):
-    def __init__(self, default=None, **kwargs):
-        self.options = kwargs
+    def __init__(self, default=None, options=None):
+        self.options = options or {}
         self.selector = default
 
-    def parse(self, input, context):
+    @property
+    def current(self):
         if self.selector is None:
             raise ValueError('Selector not set!')
         if self.selector not in self.options:
             raise ValueError('Selector {} is invalid! [options: {}]'.format(
-                self.selector, ', '.join(self.options.keys())
+                self.selector, ', '.join(repr(x) for x in self.options.keys())
             ))
-        return parse(self.options[self.selector], input, context)
+        return self.options[self.selector]
+
+    def parse(self, input, context):
+        return parse(self.current, input, context)
 
     def emit(self, value, output, context):
-        if self.selector is None:
-            raise ValueError('Selector not set!')
-        if self.selector not in self.options:
-            raise ValueError('Selector {} is invalid! [options: {}]'.format(
-                self.selector, ', '.join(self.options.keys())
-            ))
-        return emit(self.options[self.selector], value, output, context)
+        return emit(self.current, value, output, context)
 
     def sizeof(self, value, context):
-        if self.selector is None:
-            raise ValueError('Selector not set!')
-        if self.selector not in self.options:
-            raise ValueError('Selector {} is invalid! [options: {}]'.format(
-                self.selector, ', '.join(self.options.keys())
-            ))
-        return sizeof(self.options[self.selector], value, context)
+        return sizeof(self.current, value, context)
 
     def __repr__(self):
-        return '<{}: {}>'.format(class_name(self), ', '.join(k + '=' + repr(v) for k, v in self.options))
+        return '<{}: {}>'.format(class_name(self), ', '.join(repr(k) + ': ' + repr(v) for k, v in self.options.items()))
 
 class Maybe(Type):
     def __init__(self, child):
