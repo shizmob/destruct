@@ -44,7 +44,7 @@ class FactChunk(Chunk):
     sample_count = UInt(32)
     padding      = Data()
 
-    def on_length(self, spec):
+    def on_length(self, spec, context):
         spec.padding.length = self.length - 4
 
 class SampleLoop(Struct):
@@ -70,10 +70,10 @@ class SampleChunk(Chunk):
     sample_loops      = Arr(SampleLoop)
     padding           = Data()
 
-    def on_sample_loop_count(self, spec):
+    def on_sample_loop_count(self, spec, context):
         spec.sample_loops.count = self.sample_loop_count
 
-    def on_padding_length(self, spec):
+    def on_padding_length(self, spec, context):
         spec.padding.length = self.padding_length - self.sample_loop_count * 6 * 4
 
 @chunk
@@ -81,7 +81,7 @@ class DataChunk(Chunk):
     id   = Sig(b'data')
     data = Data()
 
-    def on_length(self, spec):
+    def on_length(self, spec, context):
         spec.data.length = self.length
 
 @chunk
@@ -89,7 +89,7 @@ class UnknownChunk(Chunk):
     id    = Str(4)
     data  = Data()
 
-    def on_length(self, spec):
+    def on_length(self, spec, context):
         spec.data.length = self.length
 
 @metachunk

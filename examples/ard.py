@@ -19,7 +19,7 @@ class ARDArchive(Struct):
     header = ARDHeader()
     index  = Arr(ARDIndexEntry)
 
-    def on_header(self, spec):
+    def on_header(self, spec, context):
         spec.index.count = self.header.count
 
 if __name__ == '__main__':
