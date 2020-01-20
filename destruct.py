@@ -63,7 +63,7 @@ def format_value(f, formatter, indentation=0):
         else:
             fmt = '{{}}' if isinstance(f, (set, frozenset)) else '[]'
             values = []
-    elif isinstance(f, bytes):
+    elif isinstance(f, (bytes, bytearray)):
         fmt = '{}'
         values = [format_bytes(f)]
     else:
