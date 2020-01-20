@@ -21,7 +21,7 @@ __all__ = [
     # Special types.
     'Nothing', 'Static', 'RefPoint', 'Ref', 'Process', 'Map', 'Capped', 'Generic',
     # Numeric types.
-    'Int', 'UInt', 'Float', 'Double', 'Enum',
+    'Bool', 'Int', 'UInt', 'Float', 'Double', 'Enum',
     # Data types.
     'Sig', 'Str', 'Pad', 'Data',
     # Misc types.
@@ -427,6 +427,34 @@ class Int(Type):
 class UInt(Type):
     def __new__(self, *args, **kwargs):
         return Int(*args, signed=False, **kwargs)
+
+class Bool(Type):
+    def __init__(self, child=UInt(8), false=0, true=1):
+        self.child = child
+        self.false = false
+        self.true = true
+
+    def parse(self, input, context):
+        value = parse(self.child, input, context)
+        if value == self.true:
+            return True
+        elif value == self.false:
+            return False
+        raise ValueError('value {} is neither true nor false'.format(value))
+
+    def emit(self, output, value, context):
+        return emit(self.child, self.true if value else self.false, output, context)
+
+    def sizeof(self, value, context):
+        return sizeof(self.child, self.true if value else self.false, context)
+
+    def __repr__(self):
+        return '<{}({!r}, false: {}, true: {})>'.format(
+            class_name(self),
+            self.child,
+            self.false,
+            self.true
+        )
 
 class Float(Type):
     SIZE_MAP = {
