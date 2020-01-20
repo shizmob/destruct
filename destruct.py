@@ -714,7 +714,7 @@ class Data(Type):
         return '<{}{}>'.format(class_name(self), ': ' + str(self.length) if self.length is not None else '')
 
 class DateTime(Type):
-    def __init__(self, child=None, format=None, timestamp=False, timezone=datetime.timezone.utc):
+    def __init__(self, child=None, format=None, timestamp=False, timezone=None):
         self.child = child
         self.format = format
         self.timestamp = timestamp
