@@ -339,7 +339,7 @@ class Generic(Type):
 
 
 class CappedFile:
-    def __init__(self, file, max):
+    def __init__(self, file, max, exact=False):
         self._file = file
         self._pos = 0
         self._max = max
@@ -376,21 +376,30 @@ class CappedFile:
         return getattr(self._file, n)
 
 class Capped(Type):
-    def __init__(self, child, limit=None):
+    def __init__(self, child, limit=None, exact=False):
         self.child = child
         self.limit = limit
+        self.exact = exact
 
     def parse(self, input, context):
+        start = input.tell()
         capped = CappedFile(input, self.limit)
-        return parse(self.child, capped, context)
+        value = parse(self.child, capped, context)
+        if self.exact:
+            input.seek(start + self.limit, os.SEEK_SET)
+        return value
 
     def emit(self, value, output, context):
+        start = output.tell()
         capped = CappedFile(output, self.limit)
-        return emit(self.child, value, capped, context)
+        ret = emit(self.child, value, capped, context)
+        if self.exact:
+            output.seek(start + self.limit, os.SEEK_SET)
+        return ret
 
     def sizeof(self, value, context):
         child = sizeof(self.child, value, context)
-        if child is None:
+        if child is None or self.exact:
             return self.limit
         if self.limit is None:
             return child
