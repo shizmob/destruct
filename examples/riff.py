@@ -74,7 +74,7 @@ class SampleChunk(Chunk):
         spec.sample_loops.count = self.sample_loop_count
 
     def on_padding_length(self, spec, context):
-        spec.padding.length = self.padding_length - self.sample_loop_count * 6 * 4
+        spec.padding.length = self.padding_length - self.sample_loop_count * sizeof(SampleLoop)
 
 @chunk
 class DataChunk(Chunk):

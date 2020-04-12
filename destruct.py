@@ -19,7 +19,7 @@ __all__ = [
     # Bases.
     'Type', 'Context', 'Proxy',
     # Special types.
-    'Nothing', 'Static', 'RefPoint', 'Ref', 'Process', 'Map', 'Capped', 'Generic',
+    'Nothing', 'Static', 'RefPoint', 'Ref', 'Process', 'Map', 'Capped', 'Generic', 'WithFile', 'Lazy',
     # Numeric types.
     'Bool', 'Int', 'UInt', 'Float', 'Double', 'Enum',
     # Data types.
@@ -57,9 +57,13 @@ def format_value(f, formatter, indentation=0):
             fmt = '{{}}'
             values = []
     elif isinstance(f, (list, set, frozenset)):
-        if f:
+        l = len(f)
+        if l > 3:
             fmt = '{{\n{}\n}}' if isinstance(f, (set, frozenset)) else '[\n{}\n]'
             values = [indent(',\n'.join(format_value(v, formatter) for v in f), 2, True)]
+        elif l > 0:
+            fmt = '{{{}}}' if isinstance(f, (set, frozenset)) else '[{}]'
+            values = [','.join(format_value(v, formatter) for v in f)]
         else:
             fmt = '{{}}' if isinstance(f, (set, frozenset)) else '[]'
             values = []
@@ -237,7 +241,7 @@ class Ref(Type):
         return 0 # sizeof(self.child, value, context)
 
     def __repr__(self):
-        return '<{}: {!r} (offset={}, reference={})>'.format(class_name(self), self.child, self.offset, self.reference)
+        return '<{}: {!r} (point: {}, reference: {})>'.format(class_name(self), self.child, self.point, self.reference)
 
 class Process(Type):
     def __init__(self, child=None, parse=None, emit=None):
@@ -291,17 +295,8 @@ class Map(Type):
     def __repr__(self):
         return '<{}: {}>'.format(class_name(self), self.mapping)
 
-
-class GenericResolver:
-    def __init__(self):
-        self.results = []
-
-    def resolve(self, c):
-        self.results.append(c)
-
 class Generic(Type):
-    def __init__(self, target):
-        target.resolve(self)
+    def __init__(self):
         self.child = []
 
     def resolve(self, v):
@@ -312,6 +307,9 @@ class Generic(Type):
 
     def pop(self):
         self.child.pop()
+
+    def __parser__(self, ident):
+        return to_parser(self.child[-1])
 
     def parse(self, input, context):
         if not self.child:
@@ -375,6 +373,52 @@ class CappedFile:
     def __getattr__(self, n):
         return getattr(self._file, n)
 
+class WithFile(Type):
+    def __init__(self, child, file):
+        self.child = child
+        self.file = file
+
+    def parse(self, input, context):
+        return parse(self.child, self.file(input), context)
+
+    def emit(self, output, value, context):
+        return emit(self.child, self.file(output), value, context)
+
+class LazyEntry:
+    __slots__ = ('child', 'input', 'pos', 'context')
+    def __init__(self, child, input, context):
+        self.child = child
+        self.input = input
+        self.pos = input.tell()
+        self.context = context
+
+    def __call__(self):
+        with seeking(self.input, self.pos):
+            return parse(self.child, self.input, self.context)
+
+    def __str__(self):
+        return '~~{}'.format(self.child)
+
+    def __repr__(self):
+        return '<{}: {!r}>'.format(class_name(self), self.child)
+
+class Lazy(Type):
+    def __init__(self, child, length=0):
+        self.child = child
+        self.length = length
+
+    def parse(self, input, context):
+        entry = LazyEntry(to_parser(self.child), input, context)
+        input.seek(self.length, os.SEEK_CUR)
+        return entry
+
+    def __str__(self):
+        return '~{}'.format(self.child)
+
+    def __repr__(self):
+        return '<{}: {!r}>'.format(class_name(self), self.child)
+
+
 class Capped(Type):
     def __init__(self, child, limit=None, exact=False):
         self.child = child
@@ -410,30 +454,30 @@ class Capped(Type):
 
 
 ORDER_MAP = {
-    'le': '<',
-    'be': '>',
-    'native': '='
+    'le': 'little',
+    'be': 'big',
 }
 
 class Int(Type):
-    SIZE_MAP = {
-        8: 'b',
-        16: 'h',
-        32: 'i',
-        64: 'q'
-    }
-
     def __init__(self, n, signed=True, order='le'):
         self.n = n
         self.signed = signed
         self.order = order
 
-    def format(self, input, context):
-        endian = ORDER_MAP[to_value(self.order, input, context)]
-        kind = self.SIZE_MAP[to_value(self.n, input, context)]
-        if not to_value(self.signed, input, context):
-            kind = kind.upper()
-        return '{e}{k}'.format(e=endian, k=kind)
+    def parse(self, input, context):
+        n, rem = divmod(self.n, 8)
+        if rem != 0:
+            raise ValueError('{} can only decode byte-multiple integers, got: {} bits'.format(class_name(self), self.n))
+        data = input.read(n)
+        if len(data) != n:
+            raise ValueError('too little data ({} bytes) to parse {}-bit integer'.format(len(data), self.n))
+        return int.from_bytes(data, byteorder=ORDER_MAP[self.order], signed=self.signed)
+
+    def emit(self, value, output, context):
+        n, rem = divmod(self.n, 8)
+        if rem != 0:
+            raise ValueError('{} can only encode byte-multiple integers, got: {} bits'.format(class_name(self), self.n))
+        output.write(value.to_bytes(n, ORDER_MAP[self.order], signed=self.signed))
 
     def sizeof(self, value, context):
         return self.n // 8
@@ -530,7 +574,7 @@ class Enum(Type):
         return sizeof(self.child, value, context)
 
     def __repr__(self):
-        return '<{}: {}>'.format(class_name(self), self.enum.__name__)
+        return '<{}: {}>'.format(class_name(self), self.enum)
 
 class Sig(Type):
     def __init__(self, sequence):
@@ -555,7 +599,7 @@ class Sig(Type):
 class Str(Type):
     type = str
 
-    def __init__(self, length=0, kind='c', elem_size=1, exact=True, encoding='utf-8', length_type=UInt(8)):
+    def __init__(self, length=None, kind='c', elem_size=1, exact=True, encoding='utf-8', length_type=UInt(8)):
         self.length = length
         self.kind = kind
         self.exact = exact
@@ -572,14 +616,14 @@ class Str(Type):
         if kind in ('raw', 'c'):
             chars = []
             for i in itertools.count(start=1):
-                if length and i > length:
+                if length is not None and i > length:
                     break
                 c = input.read(self.elem_size)
                 if not c or (kind == 'c' and c == b'\x00' * self.elem_size):
                     break
                 chars.append(c)
 
-            if length and exact:
+            if length is not None and exact:
                 left = length - len(chars) - (kind == 'c' and c == b'\x00' * self.elem_size)
                 if left:
                     input.read(left * self.elem_size)
@@ -587,9 +631,9 @@ class Str(Type):
             data = b''.join(chars)
         elif kind == 'pascal':
             outlen = parse(self.length_type, input)
-            if length:
+            if length is not None:
                 outlen = min(length, outlen)
-            if length and exact:
+            if length is not None and exact:
                 left = length - outlen
             else:
                 left = 0
@@ -623,7 +667,7 @@ class Str(Type):
             output.write(value)
 
     def sizeof(self, value, context):
-        if self.length and self.exact:
+        if self.exact and self.length is not None:
             base = self.length
         elif value is not None:
             base = len(value)
@@ -858,30 +902,33 @@ class MetaSpec(collections.OrderedDict):
 
 class MetaStruct(type):
     @classmethod
-    def __prepare__(mcls, name, bases, **kwargs):
+    def __prepare__(mcls, name, bases, generics=[], **kwargs):
         attrs = MetaSpec({'_' + k: v for k, v in kwargs.items()})
         attrs['self'] = Proxy(attrs)
-        attrs['_'] = GenericResolver()
+        attrs['_generics'] = generics
+        attrs.update({n: Generic() for n in generics})
         attrs.update({k: globals().get(k) for k in __all__ if k[0].isupper()})
         return attrs
 
     def __new__(cls, name, bases, attrs, **kwargs):
         spec = MetaSpec()
         hooks = {}
+        generics = collections.OrderedDict()
 
         for base in bases:
             spec.update(getattr(base, '_spec', {}))
             hooks.update(getattr(base, '_hooks', {}))
+            generics.update(getattr(base, '_generics', collections.OrderedDict()))
 
         del attrs['self']
         for k in __all__:
             if k[0].isupper():
                 del attrs[k]
 
-        attrs['_generics'] = getattr(base, '_generics', collections.OrderedDict()).copy()
-        resolver = attrs.pop('_')
-        for g in resolver.results:
-            attrs['_generics'][g] = None
+        for n in attrs['_generics']:
+            g = attrs.pop(n)
+            generics[g] = None
+        attrs['_generics'] = generics
 
         for key, value in attrs.copy().items():
             if key.startswith('on_'):
@@ -923,6 +970,7 @@ class Struct(Type, metaclass=MetaStruct):
     _align = 0
     _union = False
     _hide = []
+    _partial = False
     _generics = collections.OrderedDict()
 
     def __init__(self, *args, **kwargs):
@@ -950,28 +998,37 @@ class Struct(Type, metaclass=MetaStruct):
             if parser is None:
                 setattr(self, name, None)
 
-        for name, parser in self._spec.items():
-            with context.enter(name, parser):
-                if parser is None:
-                    continue
-                if self._union:
-                    input.seek(pos, os.SEEK_SET)
+        try:
+            for name, parser in self._spec.items():
+                with context.enter(name, parser):
+                    if parser is None:
+                        continue
+                    if self._union:
+                        input.seek(pos, os.SEEK_SET)
 
-                val = parse(parser, input, context)
+                    val = parse(parser, input, context)
 
-                nbytes = input.tell() - pos
-                if self._union:
-                    n = max(n, nbytes)
-                else:
-                    if self._align:
-                        amount = self._align - (nbytes % self._align)
-                        input.seek(amount, os.SEEK_CUR)
-                        nbytes += amount
-                    n = nbytes
+                    nbytes = input.tell() - pos
+                    if self._union:
+                        n = max(n, nbytes)
+                    else:
+                        if self._align:
+                            amount = self._align - (nbytes % self._align)
+                            input.seek(amount, os.SEEK_CUR)
+                            nbytes += amount
+                        n = nbytes
 
-                setattr(self, name, val)
-                if name in self._hooks:
-                    self._hooks[name](self, self._spec, context)
+                    setattr(self, name, val)
+                    if name in self._hooks:
+                        self._hooks[name](self, self._spec, context)
+        except Exception as e:
+            # Check EOF and allow if partial.
+            b = input.read(1)
+            if not self._partial or b:
+                if b:
+                    input.seek(-1, os.SEEK_CUR)
+                raise
+            # allow EOF if partial
 
         for g in self._generics:
             g.pop()
@@ -1135,19 +1192,20 @@ class Tuple(Type):
         return '<{}({})>'.format(class_name(self), ', '.join(repr(c) for c in self.children))
 
 class Switch(Type):
-    def __init__(self, default=None, options=None):
+    def __init__(self, default=None, fallback=None, options=None):
         self.options = options or {}
         self.selector = default
+        self.fallback = fallback
 
     @property
     def current(self):
-        if self.selector is None:
+        if self.selector is None and not self.fallback:
             raise ValueError('Selector not set!')
-        if self.selector not in self.options:
+        if self.selector not in self.options and not self.fallback:
             raise ValueError('Selector {} is invalid! [options: {}]'.format(
                 self.selector, ', '.join(repr(x) for x in self.options.keys())
             ))
-        return self.options[self.selector]
+        return self.options[self.selector] if self.selector is not None and self.selector in self.options else self.fallback
 
     def parse(self, input, context):
         return parse(self.current, input, context)
@@ -1263,11 +1321,14 @@ class Arr(Type):
                 break
 
             start = input.tell()
-            child = to_parser(self.child, i)
+            if isinstance(self.child, list):
+                child = to_parser(self.child[i], i)
+            else:
+                child = to_parser(self.child, i)
             with context.enter(i, child):
                 try:
                     v = parse(child, input, context)
-                except:
+                except Exception as e:
                     # Check EOF.
                     if input.read(1) == b'':
                         break
@@ -1357,6 +1418,8 @@ def to_input(input):
 def to_parser(spec, ident=None):
     if isinstance(spec, (list, tuple)):
         return Tuple(spec)
+    elif hasattr(spec, '__parser__'):
+        return spec.__parser__(ident)
     elif isinstance(spec, Type):
         return spec
     elif inspect.isclass(spec) and issubclass(spec, Type):
@@ -1401,12 +1464,13 @@ class SizeError(DestructError):
 
 def parse(spec, input, context=None):
     parser = to_parser(spec)
-    ctx = context or Context(parser)
+    context = context or Context(parser)
+    at_start = not context.path
     try:
-        return parser.parse(to_input(input), ctx)
+        return parser.parse(to_input(input), context)
     except Exception as e:
-        if not context:
-            raise ParseError(ctx, e)
+        if at_start:
+            raise ParseError(context, e)
         else:
             raise
 
