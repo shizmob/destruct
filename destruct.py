@@ -1474,11 +1474,16 @@ def parse(spec, input, context=None):
         else:
             raise
 
-def emit(spec, value, output, context=None):
+def emit(spec, value, output=None, context=None):
     parser = to_parser(spec)
     ctx = context or Context(parser, value)
+    if output:
+        op = to_input(output)
+    else:
+        op = io.BytesIO()
     try:
-        return parser.emit(value, to_input(output), ctx)
+        parser.emit(value, op, ctx)
+        return op
     except Exception as e:
         if not context:
             raise EmitError(ctx, e)
