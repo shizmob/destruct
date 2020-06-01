@@ -18,8 +18,14 @@ from contextlib import contextmanager
 __all__ = [
     # Bases.
     'Type', 'Context', 'Proxy',
-    # Special types.
-    'Nothing', 'Static', 'RefPoint', 'Ref', 'Process', 'Map', 'Capped', 'Generic', 'WithFile', 'Lazy',
+    # Nil types.
+    'Nothing', 'Static',
+    # Input management types.
+    'RefPoint', 'Ref', 'AlignTo', 'AlignedTo', 'Capped',
+    # Post-processing types.
+    'Process', 'Map',
+    # Misc types.
+    'Generic', 'WithFile', 'Lazy',
     # Numeric types.
     'Bool', 'Int', 'UInt', 'Float', 'Double', 'Enum',
     # Data types.
@@ -452,6 +458,49 @@ class Capped(Type):
     def __repr__(self):
         return '<{}: {!r} (limit={})>'.format(class_name(self), self.child, self.limit)
 
+class AlignTo(Type):
+    def __init__(self, child, alignment, value=b'\x00'):
+        self.child = child
+        self.alignment = alignment
+        self.value = value
+
+    def parse(self, input, context):
+        res = parse(self.child, input, context)
+        adjustment = input.tell() % self.alignment
+        if adjustment:
+            input.seek(self.alignment - adjustment, os.SEEK_CUR)
+        return res
+
+    def emit(self, value, output, context):
+        emit(self.child, value, output, context)
+        adjustment = output.tell() % self.alignment
+        if adjustment:
+            output.write(self.value * (self.alignment - adjustment))
+
+    def __repr__(self):
+        return '<{}: {!r} (n={})>'.format(class_name(self), self.child, self.alignment)
+
+class AlignedTo(Type):
+    def __init__(self, child, alignment, value=b'\x00'):
+        self.child = child
+        self.alignment = alignment
+        self.value = value
+
+    def parse(self, input, context):
+        adjustment = input.tell() % self.alignment
+        if adjustment:
+            input.seek(self.alignment - adjustment, os.SEEK_CUR)
+        res = parse(self.child, input, context)
+        return res
+
+    def emit(self, value, output, context):
+        adjustment = output.tell() % self.alignment
+        if adjustment:
+            output.write(self.value * (self.alignment - adjustment))
+        emit(self.child, value, output, context)
+
+    def __repr__(self):
+        return '<{}: {!r} (n={})>'.format(class_name(self), self.child, self.alignment)
 
 ORDER_MAP = {
     'le': 'little',
