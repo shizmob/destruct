@@ -376,6 +376,9 @@ class CappedFile:
         self._pos = pos - self._start
         return self._file.seek(pos, os.SEEK_SET)
 
+    def tell(self):
+        return self._start + self._pos
+
     def __getattr__(self, n):
         return getattr(self._file, n)
 
@@ -391,16 +394,19 @@ class WithFile(Type):
         return emit(self.child, self.file(output), value, context)
 
 class LazyEntry:
-    __slots__ = ('child', 'input', 'pos', 'context')
+    __slots__ = ('child', 'input', 'pos', 'context', 'parsed')
     def __init__(self, child, input, context):
         self.child = child
         self.input = input
         self.pos = input.tell()
         self.context = context
+        self.parsed = None
 
     def __call__(self):
-        with seeking(self.input, self.pos):
-            return parse(self.child, self.input, self.context)
+        if self.parsed is None:
+            with seeking(self.input, self.pos) as f:
+                self.parsed = parse(self.child, f, self.context)
+        return self.parsed
 
     def __str__(self):
         return '~~{}'.format(self.child)
@@ -409,9 +415,9 @@ class LazyEntry:
         return '<{}: {!r}>'.format(class_name(self), self.child)
 
 class Lazy(Type):
-    def __init__(self, child, length=0):
+    def __init__(self, child, length=None):
         self.child = child
-        self.length = length
+        self.length = length or sizeof(child) or 0
 
     def parse(self, input, context):
         entry = LazyEntry(to_parser(self.child), input, context)
