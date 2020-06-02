@@ -1165,7 +1165,7 @@ class Struct(Type, metaclass=MetaStruct):
         return True
 
     def __hash__(self):
-        return hash(tuple(self))
+        return hash(tuple((k, getattr(self, k)) for k in self))
 
     def __fmt__(self, fieldfunc):
         # Format our values with fancy colouring according to type.
