@@ -994,8 +994,13 @@ class MetaStruct(type):
                 spec[key] = value
                 del attrs[key]
 
+        attrs.setdefault('_align', 0)
+        attrs.setdefault('_union', False)
+        attrs.setdefault('_partial', False)
+        attrs.setdefault('_nocopy', False)
         attrs['_spec'] = spec
         attrs['_hooks'] = hooks
+        attrs['__slots__'] = tuple(spec.keys())
 
         return super().__new__(cls, name, bases, attrs)
 
@@ -1022,16 +1027,14 @@ class MetaStruct(type):
 
 
 class Struct(Type, metaclass=MetaStruct):
-    _align = 0
-    _union = False
     _hide = []
-    _partial = False
-    _generics = collections.OrderedDict()
+    _generics = []
 
     def __init__(self, *args, **kwargs):
         self.__ordered__ = collections.OrderedDict(self.__dict__)
         super().__init__()
-        self._spec = copy.deepcopy(self._spec)
+        if not self._nocopy:
+            self._spec = copy.deepcopy(self._spec)
         for n in self._spec:
             setattr(self, n, None)
         for n, v in kwargs.items():
@@ -1555,7 +1558,6 @@ def sizeof(spec, value=None, context=None):
             raise SizeError(ctx, e)
         else:
             raise
-
     if s is None:
         raise ValueError('size was None')
     return s
